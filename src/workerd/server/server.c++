@@ -9,6 +9,8 @@
 #include <kj/compat/url.h>
 #include <kj/encoding.h>
 #include <kj/map.h>
+#include <kj/compat/http.h>
+#include <capnp/serialize-async.h>
 #include <workerd/io/worker-interface.h>
 #include <workerd/io/worker-entrypoint.h>
 #include <workerd/io/compatibility-date.h>
@@ -20,6 +22,9 @@
 #include <workerd/io/actor-cache.h>
 #include <workerd/io/actor-sqlite.h>
 #include <workerd/api/actor-state.h>
+#include <workerd/api/basics.h>
+#include <workerd/api/web-socket.h>
+#include <workerd/api/web-worker-api.capnp.h>
 #include "workerd-api.h"
 #include <stdlib.h>
 
@@ -198,6 +203,10 @@ public:
 
   virtual bool hasHandler(kj::StringPtr handlerName) = 0;
   // Returns true if the service exports the given handler, e.g. `fetch`, `scheduled`, etc.
+
+  virtual kj::StringPtr getName() {
+    return nullptr;
+  }
 };
 
 // =======================================================================================
@@ -1156,7 +1165,7 @@ public:
 
   struct LinkedIoChannels {
     // I/O channels, delivered when link() is called.
-    kj::Array<Service*> subrequest;
+    kj::Vector<Service*> subrequest;
     kj::Array<kj::Maybe<ActorNamespace&>> actor;  // null = configuration error
     kj::Maybe<Service&> cache;
     kj::Maybe<kj::Own<SqliteDatabase::Vfs>> actorStorage;
@@ -1164,12 +1173,13 @@ public:
   };
   using LinkCallback = kj::Function<LinkedIoChannels(WorkerService&)>;
 
-  WorkerService(ThreadContext& threadContext, kj::Own<const Worker> worker,
+  WorkerService(kj::String name, ThreadContext& threadContext, kj::Own<const Worker> worker,
                 kj::Maybe<kj::HashSet<kj::String>> defaultEntrypointHandlers,
                 kj::HashMap<kj::String, kj::HashSet<kj::String>> namedEntrypointsParam,
                 const kj::HashMap<kj::String, ActorConfig>& actorClasses,
                 LinkCallback linkCallback)
-      : threadContext(threadContext),
+      : name(kj::mv(name)),
+        threadContext(threadContext),
         ioChannels(kj::mv(linkCallback)),
         worker(kj::mv(worker)),
         defaultEntrypointHandlers(kj::mv(defaultEntrypointHandlers)),
@@ -1230,6 +1240,7 @@ public:
       IoChannelFactory::SubrequestMetadata metadata, kj::Maybe<kj::StringPtr> entrypointName,
       kj::Maybe<kj::Own<Worker::Actor>> actor = nullptr) {
     return WorkerEntrypoint::construct(
+        getName(),
         threadContext,
         kj::atomicAddRef(*worker),
         entrypointName,
@@ -1423,7 +1434,20 @@ public:
     }
   };
 
+  uint addChannel(Service* service) {
+    auto& channels = KJ_REQUIRE_NONNULL(ioChannels.tryGet<LinkedIoChannels>(),
+        "link() has not been called");
+    channels.subrequest.add(service);
+    return channels.subrequest.size() - 1;
+  }
+
+  virtual kj::StringPtr getName() override {
+    return name.asPtr();
+  }
+
 private:
+  kj::String name;
+
   class EntrypointService final: public Service {
   public:
     EntrypointService(WorkerService& worker, kj::StringPtr entrypoint,
@@ -1629,6 +1653,162 @@ private:
   kj::Promise<void> onLimitsExceeded() override { return kj::NEVER_DONE; }
   void requireLimitsNotExceeded() override {}
   void reportMetrics(RequestObserver& requestMetrics) override {}
+};
+
+class Server::WebWorkerService final: public Service, private WorkerInterface {
+  // Service used when the service is configured as network service.
+
+public:
+  static constexpr kj::StringPtr NAME = "web-worker-service"_kj;
+
+  kj::StringPtr getName() override {
+    return NAME;
+  }
+
+  WebWorkerService(Server& server): server(server) {}
+
+  kj::Own<WorkerInterface> startRequest(IoChannelFactory::SubrequestMetadata metadata) override {
+    auto serviceName = IoContext::current().getServiceName();
+    Service& requesterService = *KJ_UNWRAP_OR(server.services.find(serviceName), {
+      JSG_FAIL_REQUIRE(Error, "Worker serivce not found");
+    });
+    return kj::heap<WebWorkerServiceEntrypoint>(*this, kj::downcast<WorkerService>(requesterService));
+  }
+
+  bool hasHandler(kj::StringPtr handlerName) override {
+    return handlerName == "fetch"_kj;
+  }
+
+private:
+  class WebWorkerServiceEntrypoint final: public WorkerInterface {
+  public:
+    WebWorkerServiceEntrypoint(WebWorkerService& svc, WorkerService& requesterService):
+      svc(svc), requesterService(requesterService) {}
+
+    kj::Promise<void> request(
+        kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
+        kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
+      return svc.request(method, url, headers, requestBody, response, requesterService);
+    }
+
+    kj::Promise<void> connect(
+        kj::StringPtr host, const kj::HttpHeaders& headers, kj::AsyncIoStream& connection,
+        ConnectResponse& tunnel, kj::HttpConnectSettings settings) override {
+      throwUnsupported();
+    }
+
+    void prewarm(kj::StringPtr url) override {}
+    kj::Promise<ScheduledResult> runScheduled(kj::Date scheduledTime, kj::StringPtr cron) override {
+      throwUnsupported();
+    }
+    kj::Promise<AlarmResult> runAlarm(kj::Date scheduledTime) override {
+      throwUnsupported();
+    }
+    kj::Promise<CustomEvent::Result> customEvent(kj::Own<CustomEvent> event) override {
+      throwUnsupported();
+    }
+
+    [[noreturn]] void throwUnsupported() {
+      JSG_FAIL_REQUIRE(Error, "WebWorkerServiceEntrypoint doesn't support this event type.");
+    }
+
+  private:
+    WebWorkerService& svc;
+    WorkerService& requesterService;
+  };
+
+  Server& server;
+  uint workerCount;
+
+  kj::Promise<void> request(
+      kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
+      kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
+    // TODO: respond with error
+    return kj::READY_NOW;
+  }
+
+  kj::Promise<void> request(
+      kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
+      kj::AsyncInputStream& requestBody, kj::HttpService::Response& response,
+      WorkerService& requesterService) {
+    return capnp::readMessage(requestBody).then(
+        [this, url = kj::mv(url), &requesterService, &response]
+        (auto msgReader) {
+      api::experimental::CreateWorkerRequest::Reader req =
+        msgReader->template getRoot<api::experimental::CreateWorkerRequest>();
+      auto opts = req.getOptions();
+
+      // TODO: respond with 400 errors instead of throwing
+      // also TODO: as long as the format is custom; why not encode a capnp object?
+      capnp::MallocMessageBuilder workerConfig = capnp::MallocMessageBuilder();
+      auto conf = workerConfig.initRoot<config::Worker>();
+      auto dataUriPrefix = "data:text/plain;charset=utf-8,"_kj;
+      auto aUrl = req.getUrl();
+      KJ_REQUIRE(aUrl.startsWith(dataUriPrefix), "unsupported JS module URL");
+      aUrl = aUrl.slice(dataUriPrefix.size());
+      auto compatDatePrefix = "compatibility-date="_kj;
+      KJ_REQUIRE(aUrl.startsWith(compatDatePrefix), "unsupported JS module URL");
+      aUrl = aUrl.slice(compatDatePrefix.size());
+      auto compatEnd = aUrl.findFirst(',').orDefault(aUrl.size());
+      conf.setCompatibilityDate(kj::str(aUrl.slice(0, compatEnd)));
+      aUrl = aUrl.slice(compatEnd + 1);
+      auto script = KJ_REQUIRE_NONNULL(kj::decodeUriComponent(aUrl),
+          "invalid worker module encoding");
+      conf.setServiceWorkerScript(script);
+
+      kj::String name = kj::str("web-worker-", ++workerCount, "-", opts.getName());
+
+      server.actorConfigs.insert(kj::str(name), {});
+
+      capnp::MallocMessageBuilder requesterServiceDesignator = capnp::MallocMessageBuilder();
+      auto requesterDesignator = requesterServiceDesignator.initRoot<config::ServiceDesignator>();
+      requesterDesignator.setName(requesterService.getName());
+
+      kj::Maybe<kj::String> configError = nullptr;
+      auto workerService = server.makeWorker(
+        name, kj::mv(conf), {},
+        [&configError](auto err) {
+          if (err.startsWith("No event handlers"_kj)) return; // TODO: make `message` an event
+          configError = kj::mv(err);
+        },
+        requesterDesignator.asReader());
+      KJ_IF_MAYBE(err, configError) {
+        throw KJ_EXCEPTION(FAILED, *err);
+      }
+      auto& worker = server.services.insert(kj::str(name), kj::mv(workerService)).value;
+      worker->link();
+
+      auto resMessage = kj::heap<capnp::MallocMessageBuilder>(); // TODO: not alloc
+      auto res = resMessage->initRoot<api::experimental::CreateWorkerResponse>();
+      res.setChannel(requesterService.addChannel(worker));
+      res.setName(kj::mv(name));
+
+      kj::HttpHeaders responseHeaders({});
+      auto out = response.send(201, "Created", responseHeaders, nullptr);
+      return capnp::writeMessage(*out, *resMessage).attach(kj::mv(out), kj::mv(resMessage));
+    });
+  }
+
+  kj::Promise<void> connect(
+      kj::StringPtr host, const kj::HttpHeaders& headers, kj::AsyncIoStream& connection,
+      ConnectResponse& tunnel, kj::HttpConnectSettings settings) override {
+    throwUnsupported();
+  }
+
+  void prewarm(kj::StringPtr url) override {}
+  kj::Promise<ScheduledResult> runScheduled(kj::Date scheduledTime, kj::StringPtr cron) override {
+    throwUnsupported();
+  }
+  kj::Promise<AlarmResult> runAlarm(kj::Date scheduledTime) override {
+    throwUnsupported();
+  }
+  kj::Promise<CustomEvent::Result> customEvent(kj::Own<CustomEvent> event) override {
+    throwUnsupported();
+  }
+
+  [[noreturn]] void throwUnsupported() {
+    JSG_FAIL_REQUIRE(Error, "WebWorker services don't support this event type.");
+  }
 };
 
 struct FutureSubrequestChannel {
@@ -1915,13 +2095,16 @@ static kj::Maybe<WorkerdApiIsolate::Global> createBinding(
 
 
 kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::Reader conf,
-    capnp::List<config::Extension>::Reader extensions) {
+    capnp::List<config::Extension>::Reader extensions,
+    kj::Function<void(kj::String)> reportConfigError,
+    kj::Maybe<config::ServiceDesignator::Reader> requesterServiceDesignator) {
   auto& localActorConfigs = KJ_ASSERT_NONNULL(actorConfigs.find(name));
 
   struct ErrorReporter: public Worker::ValidationErrorReporter {
-    ErrorReporter(Server& server, kj::StringPtr name): server(server), name(name) {}
+    ErrorReporter(kj::Function<void(kj::String)> reportConfigError, kj::StringPtr name)
+      : reportConfigError(kj::mv(reportConfigError)), name(name) {}
 
-    Server& server;
+    kj::Function<void(kj::String)> reportConfigError;
     kj::StringPtr name;
 
     kj::HashMap<kj::String, kj::HashSet<kj::String>> namedEntrypoints;
@@ -1929,7 +2112,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
     // The `HashSet`s are the set of exported handlers, like `fetch`, `test`, etc.
 
     void addError(kj::String error) override {
-      server.reportConfigError(kj::str("service ", name, ": ", error));
+      reportConfigError(kj::str("service ", name, ": ", error));
     }
 
     void addHandler(kj::Maybe<kj::StringPtr> exportName, kj::StringPtr type) override {
@@ -1944,7 +2127,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
     }
   };
 
-  ErrorReporter errorReporter(*this, name);
+  ErrorReporter errorReporter(kj::mv(reportConfigError), name);
 
   capnp::MallocMessageBuilder arena;
   // TODO(beta): Factor out FeatureFlags from WorkerBundle.
@@ -2034,12 +2217,34 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
     }
   }
 
+  // If the worker is a dedicated worker (i.e. created using `new Worker` syntax), then it
+  // receives a `postMessage` binding associated with a channel back to the main thread.
+  kj::Maybe<Global> postMessageGlobal = requesterServiceDesignator.map(
+      [&name, &subrequestChannels](auto serviceDesignator) -> Global {
+    uint channel = (uint)subrequestChannels.size() + IoContext::SPECIAL_SUBREQUEST_CHANNEL_COUNT;
+    subrequestChannels.add(FutureSubrequestChannel {
+      kj::mv(serviceDesignator),
+      kj::str("Worker \"", name , "\"'s binding \"postMessage\""),
+    });
+    return {.name = kj::str("postMessage"), .value = Global::PostMessage {
+      .channel = channel,
+      .entrypoint = kj::str(name),
+    }};
+  });
+
   auto worker = kj::atomicRefcounted<Worker>(
       kj::mv(script),
       kj::atomicRefcounted<WorkerObserver>(),
-      [&](jsg::Lock& lock, const Worker::ApiIsolate& apiIsolate, v8::Local<v8::Object> target) {
-        return kj::downcast<const WorkerdApiIsolate>(apiIsolate).compileGlobals(
-            lock, globals, target, 1);
+      [&](jsg::Lock& lock, const Worker::ApiIsolate& apiIsolate,
+        v8::Local<v8::Object> globalBindings, v8::Local<v8::Object> envBindings) {
+        auto& isolate = kj::downcast<const WorkerdApiIsolate>(apiIsolate);
+        isolate.compileGlobals(lock, globals, envBindings, 1);
+
+        KJ_IF_MAYBE(postMessage, postMessageGlobal) {
+          // It's significantly easier to bind `postMessage` into an existing
+          // `ServiceWorkerGlobalScope` than pass state to a proper `DedicatedWorkerGlobalScope`.
+          isolate.compileGlobals(lock, {kj::mv(*postMessage)}, globalBindings, 1);
+        }
       },
       IsolateObserver::StartType::COLD,
       nullptr,          // systemTracer -- TODO(beta): factor out
@@ -2053,7 +2258,8 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
 
   auto linkCallback =
       [this, name, conf, subrequestChannels = kj::mv(subrequestChannels),
-       actorChannels = kj::mv(actorChannels)](WorkerService& workerService) mutable {
+       actorChannels = kj::mv(actorChannels),
+       featureFlags, &reportConfigError](WorkerService& workerService) mutable {
     WorkerService::LinkedIoChannels result{.alarmScheduler = *alarmScheduler};
 
     auto services = kj::heapArrayBuilder<Service*>(subrequestChannels.size() +
@@ -2064,9 +2270,20 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
 
     // Bind both "next" and "null" to the global outbound. (The difference between these is a
     // legacy artifact that no one should be depending on.)
-    static_assert(IoContext::SPECIAL_SUBREQUEST_CHANNEL_COUNT == 2);
+    static_assert(IoContext::SPECIAL_SUBREQUEST_CHANNEL_COUNT == 3);
     services.add(&globalService);
     services.add(&globalService);
+    kj::Function<Service*()> getWebWorkerService = ([&]() -> Service* {
+      // TODO: make this an on-demand binding through globals
+      // alternative TODO: hoist `ServiceWorkerGlobalScope` creation
+      if (featureFlags.getWebWorkers()) {
+        KJ_IF_MAYBE(wwsvc, this->services.find(WebWorkerService::NAME)) {
+          return *wwsvc;
+        }
+      }
+      return makeInvalidConfigService();
+    });
+    services.add(getWebWorkerService());
 
     for (auto& channel: subrequestChannels) {
       services.add(&lookupService(channel.designator, kj::mv(channel.errorContext)));
@@ -2132,7 +2349,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
     return result;
   };
 
-  return kj::heap<WorkerService>(globalContext->threadContext, kj::mv(worker),
+  return kj::heap<WorkerService>(kj::str(name), globalContext->threadContext, kj::mv(worker),
                                  kj::mv(errorReporter.defaultEntrypoint),
                                  kj::mv(errorReporter.namedEntrypoints), localActorConfigs,
                                  kj::mv(linkCallback));
@@ -2159,7 +2376,9 @@ kj::Own<Server::Service> Server::makeService(
       return makeNetworkService(conf.getNetwork());
 
     case config::Service::WORKER:
-      return makeWorker(name, conf.getWorker(), extensions);
+      return makeWorker(name, conf.getWorker(), extensions, [this](auto err) {
+          return this->reportConfigError(kj::mv(err));
+      });
 
     case config::Service::DISK:
       return makeDiskDirectoryService(name, conf.getDisk(), headerTableBuilder);
@@ -2520,6 +2739,15 @@ void Server::startServices(jsg::V8System& v8System, config::Config::Reader confi
       reportConfigError(kj::str("Config defines multiple services named \"", name, "\"."));
     });
   }
+
+  // Make the "web-workers" service if it's required and not there already.
+  services.findOrCreate(WebWorkerService::NAME, [&]() {
+    auto service = kj::heap<WebWorkerService>(*this);
+    return decltype(services)::Entry {
+      kj::str(WebWorkerService::NAME),
+      kj::mv(service)
+    };
+  });
 
   // Make the default "internet" service if it's not there already.
   services.findOrCreate("internet"_kj, [&]() {

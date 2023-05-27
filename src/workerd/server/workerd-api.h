@@ -54,6 +54,17 @@ public:
         return *this;
       }
     };
+    struct PostMessage {
+      uint channel;
+      kj::String entrypoint;
+
+      PostMessage clone() const {
+        return PostMessage {
+          .channel = channel,
+          .entrypoint = kj::str(entrypoint),
+        };
+      }
+    };
     struct KvNamespace {
       uint subrequestChannel;
 
@@ -140,8 +151,9 @@ public:
       }
     };
     kj::String name;
-    kj::OneOf<Json, Fetcher, KvNamespace, R2Bucket, R2Admin, CryptoKey, EphemeralActorNamespace,
-              DurableActorNamespace, QueueBinding, kj::String, kj::Array<byte>, Wrapped> value;
+    kj::OneOf<Json, Fetcher, PostMessage, KvNamespace, R2Bucket, R2Admin, CryptoKey,
+              EphemeralActorNamespace, DurableActorNamespace, QueueBinding,
+              kj::String, kj::Array<byte>, Wrapped> value;
 
     Global clone() const;
   };

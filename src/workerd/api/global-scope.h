@@ -14,6 +14,8 @@
 #include "hibernation-event-params.h"
 #include "blob.h"
 #include "streams.h"
+#include "streams/standard.h"
+#include "web-worker.h"
 
 namespace workerd::api {
 
@@ -196,10 +198,13 @@ struct ExportedHandler {
   typedef kj::Promise<void> HibernatableWebSocketErrorHandler(jsg::Ref<WebSocket>, jsg::Value);
   jsg::LenientOptional<jsg::Function<HibernatableWebSocketErrorHandler>> webSocketError;
 
+  typedef void PostMessageHandler(v8::Local<v8::Value> message);
+  jsg::LenientOptional<jsg::Function<PostMessageHandler>> postMessage;
+
   jsg::SelfRef self;
   // Self-ref potentially allows extracting other custom handlers from the object.
 
-  JSG_STRUCT(fetch, tail, trace, scheduled, alarm, test, webSocketMessage, webSocketClose, webSocketError, self);
+  JSG_STRUCT(fetch, tail, trace, scheduled, alarm, test, webSocketMessage, webSocketClose, webSocketError, postMessage, self);
 
   JSG_STRUCT_TS_ROOT();
   // ExportedHandler isn't included in the global scope, but we still want to
@@ -487,6 +492,10 @@ public:
     JSG_NESTED_TYPE(Crypto);
     JSG_NESTED_TYPE(SubtleCrypto);
     JSG_NESTED_TYPE(CryptoKey);
+
+    if (flags.getWebWorkers()) {
+      JSG_NESTED_TYPE_NAMED(WebWorker, Worker);
+    }
 
     JSG_NESTED_TYPE(CacheStorage);
     JSG_NESTED_TYPE(Cache);

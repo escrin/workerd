@@ -26,6 +26,7 @@
 #include <workerd/api/r2-admin.h>
 #include <workerd/api/trace.h>
 #include <workerd/api/urlpattern.h>
+#include <workerd/api/web-worker.h>
 #include <workerd/api/node/node.h>
 #include <workerd/io/promise-wrapper.h>
 #include <workerd/util/thread-scopes.h>
@@ -67,6 +68,7 @@ JSG_DECLARE_ISOLATE_TYPE(JsgWorkerdIsolate,
   EW_SOCKETS_ISOLATE_TYPES,
   EW_KV_ISOLATE_TYPES,
   EW_QUEUE_ISOLATE_TYPES,
+  EW_WEB_WORKER_ISOLATE_TYPES,
   EW_R2_PUBLIC_BETA_ADMIN_ISOLATE_TYPES,
   EW_R2_PUBLIC_BETA_ISOLATE_TYPES,
   EW_SCHEDULED_ISOLATE_TYPES,
@@ -527,6 +529,17 @@ static v8::Local<v8::Value> createBindingValue(
           pipeline.isInHouse));
     }
 
+    KJ_CASE_ONEOF(postMessage, Global::PostMessage) {
+      value = lock.wrapSimpleFunction(context,
+          [channel = postMessage.channel, entrypoint = kj::str(postMessage.entrypoint)](
+            jsg::Lock& js, const v8::FunctionCallbackInfo<v8::Value>& info) {
+        if (info.Length() < 1) return;
+        auto& context = IoContext::current();
+        context.addWaitUntil(api::WebWorker::postMessageRequest(
+          js, context, channel, entrypoint.asPtr(), info[0], nullptr));
+      });
+    }
+
     KJ_CASE_ONEOF(ns, Global::KvNamespace) {
       value = lock.wrap(context, jsg::alloc<api::KvNamespace>(
           kj::Array<api::KvNamespace::AdditionalHeader>{}, ns.subrequestChannel));
@@ -664,6 +677,9 @@ WorkerdApiIsolate::Global WorkerdApiIsolate::Global::clone() const {
     }
     KJ_CASE_ONEOF(fetcher, Global::Fetcher) {
       result.value = fetcher.clone();
+    }
+    KJ_CASE_ONEOF(postMessage, Global::PostMessage) {
+      result.value = postMessage.clone();
     }
     KJ_CASE_ONEOF(kvNamespace, Global::KvNamespace) {
       result.value = kvNamespace.clone();

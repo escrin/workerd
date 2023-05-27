@@ -39,6 +39,7 @@ private:
 };
 
 kj::Own<WorkerInterface> WorkerEntrypoint::construct(
+                                   kj::StringPtr serviceName,
                                    ThreadContext& threadContext,
                                    kj::Own<const Worker> worker,
                                    kj::Maybe<kj::StringPtr> entrypointName,
@@ -53,7 +54,7 @@ kj::Own<WorkerInterface> WorkerEntrypoint::construct(
                                    kj::Maybe<kj::String> cfBlobJson) {
   auto obj = kj::heap<WorkerEntrypoint>(kj::Badge<WorkerEntrypoint>(), threadContext,
       waitUntilTasks, tunnelExceptions, entrypointName, kj::mv(cfBlobJson));
-  obj->init(kj::mv(worker), kj::mv(actor), kj::mv(limitEnforcer),
+  obj->init(kj::mv(serviceName), kj::mv(worker), kj::mv(actor), kj::mv(limitEnforcer),
       kj::mv(ioContextDependency), kj::mv(ioChannelFactory), kj::addRef(*metrics),
       kj::mv(workerTracer));
   auto& wrapper = metrics->wrapWorkerInterface(*obj);
@@ -73,6 +74,7 @@ WorkerEntrypoint::WorkerEntrypoint(kj::Badge<WorkerEntrypoint> badge,
       cfBlobJson(kj::mv(cfBlobJson)) {}
 
 void WorkerEntrypoint::init(
+    kj::StringPtr serviceName,
     kj::Own<const Worker> worker,
     kj::Maybe<kj::Own<Worker::Actor>> actor,
     kj::Own<LimitEnforcer> limitEnforcer,
@@ -89,7 +91,7 @@ void WorkerEntrypoint::init(
     });
 
     return kj::refcounted<IoContext>(
-        threadContext, kj::mv(worker), actorRef, kj::mv(limitEnforcer))
+        threadContext, kj::mv(worker), actorRef, kj::mv(limitEnforcer), kj::str(serviceName))
             .attach(kj::mv(ioContextDependency));
   };
 
@@ -155,19 +157,55 @@ kj::Promise<void> WorkerEntrypoint::request(
 
   auto metricsForCatch = kj::addRef(incomingRequest->getMetrics());
 
-  return context.run(
-      [this, &context, method, url, &headers, &requestBody,
-       &metrics = incomingRequest->getMetrics(),
-       &wrappedResponse = *wrappedResponse, entrypointName = entrypointName]
-      (Worker::Lock& lock) mutable {
-    jsg::AsyncContextFrame::StorageScope traceScope = context.makeAsyncTraceScope(lock);
+  kj::Promise<void> prom = kj::Promise<void>(nullptr);
+  if (url == "post-message") {
+    auto host = KJ_UNWRAP_OR(headers.get(kj::HttpHeaderId::HOST), {
+      throw KJ_EXCEPTION(FAILED, "forgot to set Host header!"); // TODO: return 400
+    });
+    prom = requestBody.readAllBytes().then(
+        [&context,host = kj::mv(host)](auto data) {
+      return context.run(
+          [data = kj::mv(data), host = kj::mv(host)](Worker::Lock& lock) mutable {
+        jsg::Deserializer des(lock.getIsolate(), data.asPtr(), nullptr, nullptr,
+            jsg::Deserializer::Options {
+          .version = 15,
+          .readHeader = true,
+        });
+        if (host == "DedicatedWorkerGlobalScope") {
+          // TODO: turn into regular exported handler
+          auto event = jsg::alloc<api::MessageEvent>(lock.getIsolate(), des.readValue());
+          lock.getGlobalScope().dispatchEventImpl(lock, kj::mv(event));
+        } else {
+          auto& handler = KJ_UNWRAP_OR(lock.getExportedHandler(host, nullptr), {
+            throw KJ_EXCEPTION(FAILED, kj::str("no such exported service: ", host)); // TODO: return 404
+          });
+          auto& postMessage = KJ_UNWRAP_OR(handler.postMessage, {
+            throw KJ_EXCEPTION(FAILED, kj::str(host, " was not a postMessage handler")); // TODO: return 404
+          });
+          postMessage(lock, des.readValue());
+        }
+      });
+    }).then([&response = *wrappedResponse]() mutable {
+      kj::HttpHeaders responseHeaders({});
+      auto out = response.send(204, "No Content", responseHeaders, (uint)0);
+      return out->write({}).attach(kj::mv(out));
+    });
+  } else {
+    prom = context.run(
+        [this, &context, method, url, &headers, &requestBody,
+         &metrics = incomingRequest->getMetrics(),
+         &wrappedResponse = *wrappedResponse, entrypointName = entrypointName]
+        (Worker::Lock& lock) mutable -> kj::Promise<void> {
+      return lock.getGlobalScope().request(
+          method, url, headers, requestBody, wrappedResponse,
+          cfBlobJson, lock, lock.getExportedHandler(entrypointName, context.getActor()))
+        .then([this](api::DeferredProxy<void> deferredProxy) {
+          proxyTask = kj::mv(deferredProxy.proxyTask);
+        });
+    });
+  }
 
-    return lock.getGlobalScope().request(
-        method, url, headers, requestBody, wrappedResponse,
-        cfBlobJson, lock, lock.getExportedHandler(entrypointName, context.getActor()));
-  }).then([this](api::DeferredProxy<void> deferredProxy) {
-    proxyTask = kj::mv(deferredProxy.proxyTask);
-  }).exclusiveJoin(context.onAbort())
+  return prom.exclusiveJoin(context.onAbort())
       .catch_([this,&context](kj::Exception&& exception) mutable -> kj::Promise<void> {
     // Log JS exceptions to the JS console, if fiddle is attached. This also has the effect of
     // logging internal errors to syslog.

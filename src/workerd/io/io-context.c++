@@ -152,9 +152,11 @@ ThreadContext::ThreadContext(
 IoContext::IoContext(ThreadContext& thread,
                                kj::Own<const Worker> workerParam,
                                kj::Maybe<Worker::Actor&> actorParam,
-                               kj::Own<LimitEnforcer> limitEnforcerParam)
+                               kj::Own<LimitEnforcer> limitEnforcerParam,
+                               kj::String serviceName)
     : thread(thread),
       worker(kj::mv(workerParam)),
+      serviceName(kj::mv(serviceName)),
       actor(actorParam),
       limitEnforcer(kj::mv(limitEnforcerParam)),
       threadId(getThreadId()),
