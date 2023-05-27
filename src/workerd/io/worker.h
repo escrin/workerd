@@ -82,7 +82,8 @@ public:
                   kj::Own<WorkerObserver> metrics,
                   kj::FunctionParam<void(
                       jsg::Lock& lock, const ApiIsolate& apiIsolate,
-                      v8::Local<v8::Object> target)> compileBindings,
+                      v8::Local<v8::Object> globalThis,
+                      v8::Local<v8::Object> env)> compileBindings,
                   IsolateObserver::StartType startType,
                   SpanParent parentSpan, LockType lockType,
                   kj::Maybe<ValidationErrorReporter&> errorReporter = nullptr);
@@ -576,6 +577,9 @@ public:
   void validateHandlers(ValidationErrorReporter& errorReporter);
   // Checks for problems with the registered event handlers (such as that there are none) and
   // reports them to the error reporter.
+
+  void addExportedHandler(kj::String entrypointName, api::ExportedHandler handler);
+  // Adds a new ExportedHandler exported under the given name.
 
   kj::Maybe<api::ExportedHandler&> getExportedHandler(
       kj::Maybe<kj::StringPtr> entrypointName, kj::Maybe<Worker::Actor&> actor);

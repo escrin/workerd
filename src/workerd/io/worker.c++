@@ -1259,7 +1259,8 @@ Worker::Worker(kj::Own<const Script> scriptParam,
                kj::Own<WorkerObserver> metricsParam,
                kj::FunctionParam<void(
                       jsg::Lock& lock, const ApiIsolate& apiIsolate,
-                      v8::Local<v8::Object> target)> compileBindings,
+                      v8::Local<v8::Object> globalThis,
+                      v8::Local<v8::Object> env)> compileBindings,
                IsolateObserver::StartType startType,
                SpanParent parentSpan, LockType lockType,
                kj::Maybe<ValidationErrorReporter&> errorReporter)
@@ -1350,7 +1351,7 @@ Worker::Worker(kj::Own<const Script> scriptParam,
         }
       }
 
-      compileBindings(lock, *script->isolate->apiIsolate, bindingsScope);
+      compileBindings(lock, *script->isolate->apiIsolate, context->Global(), bindingsScope);
 
       // Execute script.
       currentSpan = maybeMakeSpan("lw:top_level_execution"_kjc);
@@ -1606,6 +1607,10 @@ v8::Local<v8::Context> Worker::Lock::getContext() {
   } else {
     KJ_UNREACHABLE;
   }
+}
+
+void Worker::Lock::addExportedHandler(kj::String name, api::ExportedHandler handler) {
+  worker.impl->namedHandlers.insert(kj::mv(name), kj::mv(handler));
 }
 
 kj::Maybe<api::ExportedHandler&> Worker::Lock::getExportedHandler(

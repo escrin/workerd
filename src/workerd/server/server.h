@@ -155,7 +155,9 @@ private:
       kj::StringPtr name, config::DiskDirectory::Reader conf,
       kj::HttpHeaderTable::Builder& headerTableBuilder);
   kj::Own<Service> makeWorker(kj::StringPtr name, config::Worker::Reader conf,
-      capnp::List<config::Extension>::Reader extensions);
+      capnp::List<config::Extension>::Reader extensions,
+      kj::Function<void(kj::String)> reportConfigError,
+      kj::Maybe<config::ServiceDesignator::Reader> requesterServiceDesignator = nullptr);
   kj::Own<Service> makeService(
       config::Service::Reader conf,
       kj::HttpHeaderTable::Builder& headerTableBuilder,
@@ -175,6 +177,7 @@ private:
   class WorkerEntrypointService;
   class HttpListener;
 
+  class WebWorkerService;
   class InspectorService;
 
   kj::Maybe<kj::Own<InspectorService>> maybeInspectorService;

@@ -22,6 +22,7 @@ class WorkerEntrypoint final: public WorkerInterface {
   // - Finish waitUntil() tasks.
 public:
   static kj::Own<WorkerInterface> construct(
+                   kj::StringPtr serviceName,
                    ThreadContext& threadContext,
                    kj::Own<const Worker> worker,
                    kj::Maybe<kj::StringPtr> entrypointName,
@@ -77,6 +78,7 @@ private:
   // See gory details in WorkerEntrypoint::request().
 
   void init(
+      kj::StringPtr serviceName,
       kj::Own<const Worker> worker,
       kj::Maybe<kj::Own<Worker::Actor>> actor,
       kj::Own<LimitEnforcer> limitEnforcer,

@@ -330,4 +330,9 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
       $compatEnableDate("2023-08-01");
   # Perform additional error checking in the Web Crypto API to conform with the specification as
   # well as reject key parameters that may be unsafe based on key length or public exponent.
+
+  webWorkers @34 :Bool
+      $compatEnableFlag("web_workers")
+      $experimental;
+  # Provide the `Worker` global to the worker with this compatibility flag.
 }
