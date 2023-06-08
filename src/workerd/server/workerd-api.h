@@ -26,6 +26,10 @@ public:
       getErrorInterfaceTypeHandler(jsg::Lock& lock) const override;
   const jsg::TypeHandler<api::QueueExportedHandler>& getQueueTypeHandler(
       jsg::Lock& lock) const override;
+  const jsg::TypeHandler<api::JsonWebKey>& getJsonWebKeyTypeHandler(
+      jsg::Lock& lock) const override;
+  const jsg::TypeHandler<jsg::Ref<api::CryptoKey>>& getCryptoKeyTypeHandler(
+      jsg::Lock& lock) const override;
 
   static Worker::Script::Source extractSource(kj::StringPtr name,
       config::Worker::Reader conf,

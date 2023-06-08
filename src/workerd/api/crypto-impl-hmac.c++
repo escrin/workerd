@@ -59,7 +59,7 @@ private:
       JSG_REQUIRE(keyAlgorithm.hash.name.slice(0, 4) == "SHA-"_kj, DOMNotSupportedError,
           "Unimplemented JWK key export format for key algorithm \"", keyAlgorithm.hash.name, "\".");
 
-      SubtleCrypto::JsonWebKey jwk;
+      JsonWebKey jwk;
       jwk.kty = kj::str("oct");
       jwk.k = kj::encodeBase64Url(keyData);
       jwk.alg = kj::str("HS", keyAlgorithm.hash.name.slice(4));
@@ -158,7 +158,7 @@ kj::Own<CryptoKey::Impl> CryptoKey::Impl::importHmac(
     // NOTE: Checked in SubtleCrypto::importKey().
     keyDataArray = kj::mv(keyData.get<kj::Array<kj::byte>>());
   } else if (format == "jwk") {
-    auto& keyDataJwk = keyData.get<SubtleCrypto::JsonWebKey>();
+    auto& keyDataJwk = keyData.get<JsonWebKey>();
     JSG_REQUIRE(keyDataJwk.kty == "oct", DOMDataError,
         "HMAC \"jwk\" key import requires a JSON Web Key with Key Type parameter "
         "(\"kty\") equal to \"oct\" (encountered \"", keyDataJwk.kty, "\").");

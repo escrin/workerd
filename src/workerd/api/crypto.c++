@@ -632,15 +632,16 @@ jsg::Ref<CryptoKey> SubtleCrypto::importKeySync(
 jsg::Promise<SubtleCrypto::ExportKeyData> SubtleCrypto::exportKey(
     jsg::Lock& js, kj::String format, const CryptoKey& key) {
   auto checkErrorsOnFinish = webCryptoOperationBegin(__func__, key.getAlgorithmName());
+  return js.evalNow([&] { return exportKeySync(js, kj::mv(format), key); });
+}
 
-  return js.evalNow([&] {
-    // TODO(someday): Throw a NotSupportedError? The Web Crypto API spec says InvalidAccessError,
-    //   but Web IDL says that's deprecated.
-    JSG_REQUIRE(key.getExtractable(), DOMInvalidAccessError,
-        "Attempt to export non-extractable ", key.getAlgorithmName(), " key.");
-
-    return key.impl->exportKey(format);
-  });
+SubtleCrypto::ExportKeyData SubtleCrypto::exportKeySync(
+    jsg::Lock& js, kj::String format, const CryptoKey& key) {
+  // TODO(someday): Throw a NotSupportedError? The Web Crypto API spec says InvalidAccessError,
+  //   but Web IDL says that's deprecated.
+  JSG_REQUIRE(key.getExtractable(), DOMInvalidAccessError,
+      "Attempt to export non-extractable ", key.getAlgorithmName(), " key.");
+  return key.impl->exportKey(format);
 }
 
 bool SubtleCrypto::timingSafeEqual(kj::Array<kj::byte> a, kj::Array<kj::byte> b) {

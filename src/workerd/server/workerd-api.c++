@@ -180,6 +180,17 @@ const jsg::TypeHandler<api::QueueExportedHandler>&
   return kj::downcast<JsgWorkerdIsolate::Lock>(lock).getTypeHandler<api::QueueExportedHandler>();
 }
 
+const jsg::TypeHandler<api::JsonWebKey>&
+    WorkerdApiIsolate::getJsonWebKeyTypeHandler(jsg::Lock& lock) const {
+  return kj::downcast<JsgWorkerdIsolate::Lock>(lock)
+    .getTypeHandler<api::JsonWebKey>();
+}
+
+const jsg::TypeHandler<jsg::Ref<api::CryptoKey>>&
+    WorkerdApiIsolate::getCryptoKeyTypeHandler(jsg::Lock& lock) const {
+  return kj::downcast<JsgWorkerdIsolate::Lock>(lock).getTypeHandler<jsg::Ref<api::CryptoKey>>();
+}
+
 struct NoopCompilationObserver final : public jsg::CompilationObserver {
   kj::Own<void> onEsmCompilationStart(v8::Isolate* isolate,
       kj::StringPtr name, jsg::ModuleInfoCompileOption option) const override {
@@ -535,8 +546,12 @@ static v8::Local<v8::Value> createBindingValue(
             jsg::Lock& js, const v8::FunctionCallbackInfo<v8::Value>& info) {
         if (info.Length() < 1) return;
         auto& context = IoContext::current();
+        const auto& jwkHandler =
+          kj::downcast<JsgWorkerdIsolate::Lock>(js).getTypeHandler<api::JsonWebKey>();
+        const auto& keyHandler =
+          kj::downcast<JsgWorkerdIsolate::Lock>(js).getTypeHandler<jsg::Ref<api::CryptoKey>>();
         context.addWaitUntil(api::WebWorker::postMessageRequest(
-          js, context, channel, entrypoint.asPtr(), info[0], nullptr));
+          js, context, channel, entrypoint.asPtr(), info[0], nullptr, jwkHandler, keyHandler));
       });
     }
 

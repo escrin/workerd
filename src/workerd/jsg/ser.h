@@ -9,7 +9,7 @@
 
 namespace workerd::jsg {
 
-class Serializer final: v8::ValueSerializer::Delegate {
+class Serializer: v8::ValueSerializer::Delegate {
   // Wraps the v8::ValueSerializer and v8::ValueSerializer::Delegate implementation.
 public:
   struct Options {
@@ -57,7 +57,7 @@ private:
   bool released = false;
 };
 
-class Deserializer final: v8::ValueDeserializer::Delegate {
+class Deserializer: v8::ValueDeserializer::Delegate {
 public:
   struct Options {
     kj::Maybe<uint32_t> version;
@@ -70,8 +70,8 @@ public:
       kj::Maybe<kj::ArrayPtr<std::shared_ptr<v8::BackingStore>>> transferedArrayBuffers = nullptr,
       kj::Maybe<kj::ArrayPtr<std::shared_ptr<v8::BackingStore>>> sharedArrayBuffers = nullptr,
       kj::Maybe<Options> maybeOptions = nullptr)
-      : isolate(isolate),
-        deser(isolate, data.begin(), data.size(), this),
+      : deser(isolate, data.begin(), data.size(), this),
+        isolate(isolate),
         sharedBackingStores(kj::mv(sharedArrayBuffers)) {
     init(kj::mv(transferedArrayBuffers), kj::mv(maybeOptions));
   }
@@ -93,6 +93,9 @@ public:
 
   inline uint32_t getVersion() const { return deser.GetWireFormatVersion(); }
 
+protected:
+  v8::ValueDeserializer deser;
+
 private:
   void init(
       kj::Maybe<kj::ArrayPtr<std::shared_ptr<v8::BackingStore>>> transferedArrayBuffers = nullptr,
@@ -103,7 +106,6 @@ private:
       uint32_t clone_id) override;
 
   v8::Isolate* isolate;
-  v8::ValueDeserializer deser;
   kj::Maybe<kj::ArrayPtr<std::shared_ptr<v8::BackingStore>>> sharedBackingStores;
 };
 

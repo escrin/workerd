@@ -40,7 +40,7 @@ public:
         "\".");
 
     if (format == "jwk") {
-      SubtleCrypto::JsonWebKey jwk;
+      JsonWebKey jwk;
       jwk.kty = kj::str("oct");
       jwk.k = kj::encodeBase64Url(keyData);
       jwk.ext = true;
@@ -55,7 +55,7 @@ private:
 };
 }  // namespace
 
-kj::OneOf<kj::String, kj::Array<kj::byte>, SubtleCrypto::JsonWebKey> CryptoImpl::exportKey(
+kj::OneOf<kj::String, kj::Array<kj::byte>, JsonWebKey> CryptoImpl::exportKey(
     jsg::Lock& js,
     jsg::Ref<CryptoKey> key,
     jsg::Optional<KeyExportOptions> options) {
