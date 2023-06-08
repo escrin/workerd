@@ -31,8 +31,10 @@ namespace jsg {
 }
 
 namespace api {
+  class CryptoKey;
   class DurableObjectState;
   class DurableObjectStorage;
+  struct JsonWebKey;
   class ServiceWorkerGlobalScope;
   struct ExportedHandler;
   struct CryptoAlgorithm;
@@ -498,6 +500,10 @@ public:
   virtual const jsg::TypeHandler<ErrorInterface>&
       getErrorInterfaceTypeHandler(jsg::Lock& lock) const = 0;
   virtual const jsg::TypeHandler<api::QueueExportedHandler>& getQueueTypeHandler(
+      jsg::Lock& lock) const = 0;
+  virtual const jsg::TypeHandler<api::JsonWebKey>& getJsonWebKeyTypeHandler(
+      jsg::Lock& lock) const = 0;
+  virtual const jsg::TypeHandler<jsg::Ref<api::CryptoKey>>& getCryptoKeyTypeHandler(
       jsg::Lock& lock) const = 0;
 
   virtual kj::Maybe<const api::CryptoAlgorithm&> getCryptoAlgorithm(kj::StringPtr name) const {

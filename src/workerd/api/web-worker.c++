@@ -6,6 +6,7 @@
 #include "web-worker.h"
 #include <capnp/serialize-async.h>
 #include <workerd/api/basics.h>
+#include <workerd/api/crypto.h>
 #include <workerd/api/global-scope.h>
 #include <workerd/api/web-worker-api.capnp.h>
 
@@ -95,14 +96,16 @@ void WebWorker::init(jsg::Lock& js, kj::Promise<kj::String> name) {
 }
 
 void WebWorker::postMessage(jsg::Lock& js,
-      v8::Local<v8::Value> message, jsg::Optional<kj::Array<jsg::Value>> transfer) {
+    v8::Local<v8::Value> message, jsg::Optional<kj::Array<jsg::Value>> transfer,
+    const jsg::TypeHandler<JsonWebKey>& jwkHandler,
+    const jsg::TypeHandler<jsg::Ref<CryptoKey>>& keyHandler) {
   auto& context = IoContext::current();
   context.addWaitUntil(context.awaitJs(context.awaitIo(js, subrequestChannelPromise.addBranch(),
-      [message = js.v8Ref(message)](jsg::Lock& js, auto chan) mutable {
-      auto& context = IoContext::current();
-      context.addWaitUntil(WebWorker::postMessageRequest(
-          js, context, kj::mv(chan), "DedicatedWorkerGlobalScope"_kj,
-          message.getHandle(js), nullptr));
+      [message = js.v8Ref(message), &jwkHandler, &keyHandler](jsg::Lock& js, auto chan) mutable {
+    auto& context = IoContext::current();
+    context.addWaitUntil(WebWorker::postMessageRequest(
+      js, context, kj::mv(chan), "DedicatedWorkerGlobalScope"_kj,
+      message.getHandle(js), nullptr, jwkHandler, keyHandler));
   })));
 }
 
@@ -121,11 +124,10 @@ void WebWorker::reportError(jsg::Lock& js, jsg::Value err) {
 
 kj::Promise<void> WebWorker::postMessageRequest(jsg::Lock& js,
     IoContext& context, uint subrequestChannel, kj::StringPtr entrypointName,
-    v8::Local<v8::Value> message, jsg::Optional<kj::Array<jsg::Value>> transfer) {
-  jsg::Serializer serializer(js.v8Isolate, jsg::Serializer::Options {
-    .version = 15, // Use a fixed version for backward compatibility of old services.
-    .omitHeader = false,
-  });
+    v8::Local<v8::Value> message, jsg::Optional<kj::Array<jsg::Value>> transfer,
+    const jsg::TypeHandler<JsonWebKey>& jwkHandler,
+    const jsg::TypeHandler<jsg::Ref<CryptoKey>>& keyHandler) {
+  WebWorker::Serializer serializer(js.v8Isolate, jwkHandler, keyHandler);
   serializer.write(message);
   kj::Own<kj::Array<kj::byte>> serialized = kj::heap(serializer.release().data);
 
@@ -148,6 +150,41 @@ kj::Promise<void> WebWorker::postMessageRequest(jsg::Lock& js,
         return response.body->readAllBytes().attach(kj::mv(response.body)).ignoreResult();
     });
   }).attach(kj::mv(client));
+}
+
+v8::Maybe<bool> WebWorker::Serializer::IsHostObject(v8::Isolate* isolate,
+    v8::Local<v8::Object> object) {
+  return v8::Just(keyHandler.tryUnwrap(jsg::Lock::from(isolate), object) != nullptr);
+};
+
+v8::Maybe<bool> WebWorker::Serializer::WriteHostObject(v8::Isolate* isolate,
+    v8::Local<v8::Object> object) {
+  auto& js = jsg::Lock::from(isolate);
+  KJ_IF_MAYBE(key, keyHandler.tryUnwrap(js, object)) {
+    write(js.wrapString((*key)->getAlgorithmName()));
+    auto jwk = api::SubtleCrypto().exportKeySync(js, kj::str("jwk"), **key).get<JsonWebKey>();
+    write(jwkHandler.wrap(js, kj::mv(jwk)));
+    return v8::Just(true);
+  }
+  return v8::Just(false);
+};
+
+v8::MaybeLocal<v8::Object> WebWorker::Deserializer::ReadHostObject(v8::Isolate* isolate) {
+  auto& js = jsg::Lock::from(isolate);
+  auto v8Context = js.v8Isolate->GetCurrentContext();
+
+  kj::String alg = js.toString(jsg::check(deser.ReadValue(v8Context)));
+  JsonWebKey jwk = KJ_UNWRAP_OR_RETURN(
+    jwkHandler.tryUnwrap(js, jsg::check(deser.ReadValue(v8Context))),
+    { v8::MaybeLocal<v8::Object>() });
+
+  bool extractable = false; // TODO: should this be `jwk.ext.orDefault(false)`?
+  auto ops = jwk.key_ops.map([](auto& ops) { return ops.asPtr(); }).orDefault({});
+  jsg::Ref<api::CryptoKey> key = api::SubtleCrypto()
+    .importKeySync(js, "jwk"_kj, kj::mv(jwk), {.name = kj::mv(alg) }, extractable, ops);
+
+  return v8::MaybeLocal<v8::Object>(
+      v8::Local<v8::Object>::Cast(keyHandler.wrap(js, kj::mv(key))));
 }
 
 }  // namespace workerd::api

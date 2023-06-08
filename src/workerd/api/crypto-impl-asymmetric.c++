@@ -340,7 +340,7 @@ public:
   }
 
 private:
-  virtual SubtleCrypto::JsonWebKey exportJwk() const = 0;
+  virtual JsonWebKey exportJwk() const = 0;
   virtual kj::Array<kj::byte> exportRaw() const = 0;
 
   mutable kj::Own<EVP_PKEY> keyData;
@@ -363,14 +363,14 @@ enum class UsageFamily {
 ImportAsymmetricResult importAsymmetric(jsg::Lock& js, kj::StringPtr format,
     SubtleCrypto::ImportKeyData keyData, kj::StringPtr normalizedName, bool extractable,
     kj::ArrayPtr<const kj::String> keyUsages,
-    kj::FunctionParam<kj::Own<EVP_PKEY>(SubtleCrypto::JsonWebKey)> readJwk,
+    kj::FunctionParam<kj::Own<EVP_PKEY>(JsonWebKey)> readJwk,
     CryptoKeyUsageSet allowedUsages) {
   CryptoKeyUsageSet usages;
   if (format == "jwk") {
     // I found jww's SO answer immeasurably helpful while writing this:
     // https://stackoverflow.com/questions/24093272/how-to-load-a-private-key-from-a-jwk-into-openssl
 
-    auto& keyDataJwk = JSG_REQUIRE_NONNULL(keyData.tryGet<SubtleCrypto::JsonWebKey>(),
+    auto& keyDataJwk = JSG_REQUIRE_NONNULL(keyData.tryGet<JsonWebKey>(),
         DOMDataError, "JSON Web Key import requires a JSON Web Key object.");
 
     kj::StringPtr keyType;
@@ -542,11 +542,11 @@ private:
     return result.releaseAsArray();
   }
 
-  SubtleCrypto::JsonWebKey exportJwk() const override final {
+  JsonWebKey exportJwk() const override final {
     const auto& rsa = JSG_REQUIRE_NONNULL(EVP_PKEY_get0_RSA(getEvpPkey()), DOMOperationError,
         "No RSA data backing key", tryDescribeOpensslErrors());
 
-    SubtleCrypto::JsonWebKey jwk;
+    JsonWebKey jwk;
     jwk.kty = kj::str("RSA");
     jwk.alg = jwkHashAlgorithmName();
 
@@ -1039,7 +1039,7 @@ kj::OneOf<jsg::Ref<CryptoKey>, CryptoKeyPair> CryptoKey::Impl::generateRsa(
       kj::mv(keyAlgorithm), extractable, usages);
 }
 
-kj::Own<EVP_PKEY> rsaJwkReader(SubtleCrypto::JsonWebKey&& keyDataJwk) {
+kj::Own<EVP_PKEY> rsaJwkReader(JsonWebKey&& keyDataJwk) {
   auto rsaKey = OSSL_NEW(RSA);
 
   auto modulus = UNWRAP_JWK_BIGNUM(kj::mv(keyDataJwk.n),
@@ -1125,7 +1125,7 @@ kj::Own<CryptoKey::Impl> CryptoKey::Impl::importRsa(
   auto [evpPkey, keyType, usages] = importAsymmetric(
       js, kj::mv(format), kj::mv(keyData), normalizedName, extractable, keyUsages,
       // Verbose lambda capture needed because: https://bugs.llvm.org/show_bug.cgi?id=35984
-      [hashEvpMd = hashEvpMd, &algorithm](SubtleCrypto::JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
+      [hashEvpMd = hashEvpMd, &algorithm](JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
     JSG_REQUIRE(keyDataJwk.kty == "RSA", DOMDataError,
         "RSASSA-PKCS1-v1_5 \"jwk\" key import requires a JSON Web Key with Key Type parameter "
         "\"kty\" (\"", keyDataJwk.kty, "\") equal to \"RSA\".");
@@ -1226,7 +1226,7 @@ kj::Own<CryptoKey::Impl> CryptoKey::Impl::importRsaRaw(
   auto [evpPkey, keyType, usages] = importAsymmetric(
       js, kj::mv(format), kj::mv(keyData), normalizedName, extractable, keyUsages,
       // Verbose lambda capture needed because: https://bugs.llvm.org/show_bug.cgi?id=35984
-      [](SubtleCrypto::JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
+      [](JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
     JSG_REQUIRE(keyDataJwk.kty == "RSA", DOMDataError,
         "RSA-RAW \"jwk\" key import requires a JSON Web Key with Key Type parameter "
         "\"kty\" (\"", keyDataJwk.kty, "\") equal to \"RSA\".");
@@ -1536,7 +1536,7 @@ private:
 
   }
 
-  SubtleCrypto::JsonWebKey exportJwk() const override final {
+  JsonWebKey exportJwk() const override final {
     const EC_KEY& ec = JSG_REQUIRE_NONNULL(EVP_PKEY_get0_EC_KEY(getEvpPkey()), DOMOperationError,
         "No elliptic curve data backing key", tryDescribeOpensslErrors());
 
@@ -1557,7 +1557,7 @@ private:
         InternalDOMOperationError, "Error getting affine coordinates for export",
         internalDescribeOpensslErrors());
 
-    SubtleCrypto::JsonWebKey jwk;
+    JsonWebKey jwk;
     jwk.kty = kj::str("EC");
     jwk.crv = kj::str(keyAlgorithm.namedCurve);
     jwk.x = kj::encodeBase64Url(bigNumToPaddedArray(x, groupDegreeInBytes));
@@ -1727,7 +1727,7 @@ ImportAsymmetricResult importEllipticRaw(SubtleCrypto::ImportKeyData keyData, in
 
 }  // namespace
 
-kj::Own<EVP_PKEY> ellipticJwkReader(int curveId, SubtleCrypto::JsonWebKey&& keyDataJwk) {
+kj::Own<EVP_PKEY> ellipticJwkReader(int curveId, JsonWebKey&& keyDataJwk) {
   if (curveId == NID_ED25519 || curveId == NID_X25519) {
     auto evpId = curveId == NID_X25519 ? EVP_PKEY_X25519 : EVP_PKEY_ED25519;
     auto curveName = curveId == NID_X25519 ? "X25519" : "Ed25519";
@@ -1861,7 +1861,7 @@ kj::Own<CryptoKey::Impl> CryptoKey::Impl::importEcdsa(
       return importAsymmetric(
           js, format, kj::mv(keyData), normalizedName, extractable, keyUsages,
           // Verbose lambda capture needed because: https://bugs.llvm.org/show_bug.cgi?id=35984
-          [curveId = curveId](SubtleCrypto::JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
+          [curveId = curveId](JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
         return ellipticJwkReader(curveId, kj::mv(keyDataJwk));
       }, CryptoKeyUsageSet::sign() | CryptoKeyUsageSet::verify());
     } else {
@@ -1917,7 +1917,7 @@ kj::Own<CryptoKey::Impl> CryptoKey::Impl::importEcdh(
       return importAsymmetric(
           js, format, kj::mv(keyData), normalizedName, extractable, keyUsages,
           // Verbose lambda capture needed because: https://bugs.llvm.org/show_bug.cgi?id=35984
-          [curveId = curveId](SubtleCrypto::JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
+          [curveId = curveId](JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
         return ellipticJwkReader(curveId, kj::mv(keyDataJwk));
       }, CryptoKeyUsageSet::derivationKeyMask());
     } else {
@@ -2109,7 +2109,7 @@ public:
   }
 
 private:
-  SubtleCrypto::JsonWebKey exportJwk() const override final {
+  JsonWebKey exportJwk() const override final {
     KJ_ASSERT(getAlgorithmName() == "X25519"_kj || getAlgorithmName() == "Ed25519"_kj ||
         getAlgorithmName() == "NODE-ED25519"_kj);
 
@@ -2121,7 +2121,7 @@ private:
 
     KJ_ASSERT(publicKeyLen == 32, publicKeyLen);
 
-    SubtleCrypto::JsonWebKey jwk;
+    JsonWebKey jwk;
     jwk.kty = kj::str("OKP");
     jwk.crv = kj::str(getAlgorithmName() == "X25519"_kj ? "X25519"_kj : "Ed25519"_kj);
     jwk.x = kj::encodeBase64Url(kj::arrayPtr(rawPublicKey, publicKeyLen));
@@ -2296,7 +2296,7 @@ kj::Own<CryptoKey::Impl> CryptoKey::Impl::importEddsa(
     if (format != "raw") {
       return importAsymmetric(
           js, format, kj::mv(keyData), normalizedName, extractable, keyUsages,
-          [nid](SubtleCrypto::JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
+          [nid](JsonWebKey keyDataJwk) -> kj::Own<EVP_PKEY> {
         return ellipticJwkReader(nid, kj::mv(keyDataJwk));
       }, normalizedName == "X25519" ? CryptoKeyUsageSet::derivationKeyMask() :
          CryptoKeyUsageSet::sign() | CryptoKeyUsageSet::verify());

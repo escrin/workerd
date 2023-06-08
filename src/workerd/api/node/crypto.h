@@ -104,9 +104,9 @@ public:
   };
 
   struct CreateAsymmetricKeyOptions {
-    kj::OneOf<kj::Array<kj::byte>, SubtleCrypto::JsonWebKey, jsg::Ref<CryptoKey>> key;
+    kj::OneOf<kj::Array<kj::byte>, JsonWebKey, jsg::Ref<CryptoKey>> key;
     // For a PrivateKey, the key is one of either kj::Array<kj::byte> or
-    // SubtleCrypto::JsonWebKey. For a PublicKey it can also be a CryptoKey
+    // JsonWebKey. For a PublicKey it can also be a CryptoKey
     // containing a private key from which the public key will be derived.
     jsg::Optional<kj::String> format;
     jsg::Optional<kj::String> type;
@@ -116,7 +116,7 @@ public:
     JSG_STRUCT(key, format, type, passphrase);
   };
 
-  kj::OneOf<kj::String, kj::Array<kj::byte>, SubtleCrypto::JsonWebKey> exportKey(
+  kj::OneOf<kj::String, kj::Array<kj::byte>, JsonWebKey> exportKey(
       jsg::Lock& js,
       jsg::Ref<CryptoKey> key,
       jsg::Optional<KeyExportOptions> options);

@@ -126,7 +126,7 @@ KJ_TEST("AES-CTR key wrap") {
   importAlgorithm.length = 256;
   importAlgorithm.name = kj::str("AES-CBC");
 
-  const jsg::TypeHandler<SubtleCrypto::JsonWebKey>* jwkHandler = nullptr;
+  const jsg::TypeHandler<JsonWebKey>* jwkHandler = nullptr;
   // Not testing JWK here, so valid value isn't needed.
 
   bool completed = false;

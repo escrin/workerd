@@ -166,11 +166,9 @@ kj::Promise<void> WorkerEntrypoint::request(
         [&context,host = kj::mv(host)](auto data) {
       return context.run(
           [data = kj::mv(data), host = kj::mv(host)](Worker::Lock& lock) mutable {
-        jsg::Deserializer des(lock.getIsolate(), data.asPtr(), nullptr, nullptr,
-            jsg::Deserializer::Options {
-          .version = 15,
-          .readHeader = true,
-        });
+        auto& apiIsolate = lock.getWorker().getIsolate().getApiIsolate();
+        api::WebWorker::Deserializer des(lock.getIsolate(), data.asPtr(),
+            apiIsolate.getJsonWebKeyTypeHandler(lock), apiIsolate.getCryptoKeyTypeHandler(lock));
         if (host == "DedicatedWorkerGlobalScope") {
           // TODO: turn into regular exported handler
           auto event = jsg::alloc<api::MessageEvent>(lock.getIsolate(), des.readValue());

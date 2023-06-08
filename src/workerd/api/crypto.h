@@ -270,6 +270,52 @@ struct CryptoKeyPair {
   JSG_STRUCT(publicKey, privateKey);
 };
 
+struct JsonWebKey {
+// https://www.w3.org/TR/WebCryptoAPI/#JsonWebKey-dictionary
+
+  struct RsaOtherPrimesInfo {
+    // The following fields are defined in Section 6.3.2.7 of JSON Web Algorithms
+    jsg::Optional<kj::String> r;
+    jsg::Optional<kj::String> d;
+    jsg::Optional<kj::String> t;
+
+    JSG_STRUCT(r, d, t);
+    JSG_STRUCT_TS_OVERRIDE(RsaOtherPrimesInfo); // Rename from SubtleCryptoJsonWebKeyRsaOtherPrimesInfo
+  };
+
+  // The following fields are defined in Section 3.1 of JSON Web Key (RFC 7517).
+  // NOTE: The Web Crypto spec's IDL for JsonWebKey considers `kty` optional, yet the RFC lists it
+  //   as required.
+  kj::String kty;
+  jsg::Optional<kj::String> use;
+  jsg::Optional<kj::Array<kj::String>> key_ops;
+  jsg::Optional<kj::String> alg;
+
+  // The following fields are defined in JSON Web Key Parameters Registration
+  jsg::Optional<bool> ext;
+
+  // The following fields are defined in Section 6 of JSON Web Algorithms
+  jsg::Optional<kj::String> crv;
+  jsg::Optional<kj::String> x;
+  jsg::Optional<kj::String> y;
+  jsg::Optional<kj::String> d;
+  jsg::Optional<kj::String> n;
+  jsg::Optional<kj::String> e;
+  jsg::Optional<kj::String> p;
+  jsg::Optional<kj::String> q;
+  jsg::Optional<kj::String> dp;
+  jsg::Optional<kj::String> dq;
+  jsg::Optional<kj::String> qi;
+  jsg::Optional<kj::Array<RsaOtherPrimesInfo>> oth;
+  // TODO(conform): Support multiprime RSA keys. This used to be jsg::Unimplemented but needs to
+  //   be properly defined for exporting JWK of other keys. On the other hand, are we even going
+  //   to bother adding support for multiprime RSA keys? Chromium doesn't AFAICT...
+  jsg::Optional<kj::String> k;
+
+  JSG_STRUCT(kty, use, key_ops, alg, ext, crv, x, y, d, n, e, p, q, dp, dq, qi, oth, k);
+  JSG_STRUCT_TS_OVERRIDE(JsonWebKey); // Rename from SubtleCryptoJsonWebKey
+};
+
 class SubtleCrypto: public jsg::Object {
 public:
   // Algorithm dictionaries
@@ -416,52 +462,6 @@ public:
     JSG_STRUCT(name, salt, iterations, hash, $public, info);
   };
 
-  struct JsonWebKey {
-  // https://www.w3.org/TR/WebCryptoAPI/#JsonWebKey-dictionary
-
-    struct RsaOtherPrimesInfo {
-      // The following fields are defined in Section 6.3.2.7 of JSON Web Algorithms
-      jsg::Optional<kj::String> r;
-      jsg::Optional<kj::String> d;
-      jsg::Optional<kj::String> t;
-
-      JSG_STRUCT(r, d, t);
-      JSG_STRUCT_TS_OVERRIDE(RsaOtherPrimesInfo); // Rename from SubtleCryptoJsonWebKeyRsaOtherPrimesInfo
-    };
-
-    // The following fields are defined in Section 3.1 of JSON Web Key (RFC 7517).
-    // NOTE: The Web Crypto spec's IDL for JsonWebKey considers `kty` optional, yet the RFC lists it
-    //   as required.
-    kj::String kty;
-    jsg::Optional<kj::String> use;
-    jsg::Optional<kj::Array<kj::String>> key_ops;
-    jsg::Optional<kj::String> alg;
-
-    // The following fields are defined in JSON Web Key Parameters Registration
-    jsg::Optional<bool> ext;
-
-    // The following fields are defined in Section 6 of JSON Web Algorithms
-    jsg::Optional<kj::String> crv;
-    jsg::Optional<kj::String> x;
-    jsg::Optional<kj::String> y;
-    jsg::Optional<kj::String> d;
-    jsg::Optional<kj::String> n;
-    jsg::Optional<kj::String> e;
-    jsg::Optional<kj::String> p;
-    jsg::Optional<kj::String> q;
-    jsg::Optional<kj::String> dp;
-    jsg::Optional<kj::String> dq;
-    jsg::Optional<kj::String> qi;
-    jsg::Optional<kj::Array<RsaOtherPrimesInfo>> oth;
-    // TODO(conform): Support multiprime RSA keys. This used to be jsg::Unimplemented but needs to
-    //   be properly defined for exporting JWK of other keys. On the other hand, are we even going
-    //   to bother adding support for multiprime RSA keys? Chromium doesn't AFAICT...
-    jsg::Optional<kj::String> k;
-
-    JSG_STRUCT(kty, use, key_ops, alg, ext, crv, x, y, d, n, e, p, q, dp, dq, qi, oth, k);
-    JSG_STRUCT_TS_OVERRIDE(JsonWebKey); // Rename from SubtleCryptoJsonWebKey
-  };
-
   using ImportKeyData = kj::OneOf<kj::Array<kj::byte>, JsonWebKey>;
   using ExportKeyData = kj::OneOf<kj::Array<kj::byte>, JsonWebKey>;
 
@@ -533,6 +533,12 @@ public:
       jsg::Lock& js,
       kj::String format,
       const CryptoKey& key);
+
+  ExportKeyData exportKeySync(
+      jsg::Lock& js,
+      kj::String format,
+      const CryptoKey& key);
+  // NOT VISIBLE TO JS: like exportKey() but return the key, not a promise.
 
   jsg::Promise<kj::Array<kj::byte>> wrapKey(
       jsg::Lock& js,
@@ -687,26 +693,26 @@ private:
   jsg::Ref<SubtleCrypto> subtle = jsg::alloc<SubtleCrypto>();
 };
 
-#define EW_CRYPTO_ISOLATE_TYPES                       \
-  api::Crypto,                                        \
-  api::SubtleCrypto,                                  \
-  api::CryptoKey,                                     \
-  api::CryptoKeyPair,                                 \
-  api::SubtleCrypto::JsonWebKey,                      \
-  api::SubtleCrypto::JsonWebKey::RsaOtherPrimesInfo,  \
-  api::SubtleCrypto::DeriveKeyAlgorithm,              \
-  api::SubtleCrypto::EncryptAlgorithm,                \
-  api::SubtleCrypto::GenerateKeyAlgorithm,            \
-  api::SubtleCrypto::HashAlgorithm,                   \
-  api::SubtleCrypto::ImportKeyAlgorithm,              \
-  api::SubtleCrypto::SignAlgorithm,                   \
-  api::CryptoKey::KeyAlgorithm,                       \
-  api::CryptoKey::AesKeyAlgorithm,                    \
-  api::CryptoKey::HmacKeyAlgorithm,                   \
-  api::CryptoKey::RsaKeyAlgorithm,                    \
-  api::CryptoKey::EllipticKeyAlgorithm,               \
-  api::CryptoKey::ArbitraryKeyAlgorithm,              \
-  api::CryptoKey::AsymmetricKeyDetails,               \
+#define EW_CRYPTO_ISOLATE_TYPES             \
+  api::Crypto,                              \
+  api::SubtleCrypto,                        \
+  api::CryptoKey,                           \
+  api::CryptoKeyPair,                       \
+  api::JsonWebKey,                          \
+  api::JsonWebKey::RsaOtherPrimesInfo,      \
+  api::SubtleCrypto::DeriveKeyAlgorithm,    \
+  api::SubtleCrypto::EncryptAlgorithm,      \
+  api::SubtleCrypto::GenerateKeyAlgorithm,  \
+  api::SubtleCrypto::HashAlgorithm,         \
+  api::SubtleCrypto::ImportKeyAlgorithm,    \
+  api::SubtleCrypto::SignAlgorithm,         \
+  api::CryptoKey::KeyAlgorithm,             \
+  api::CryptoKey::AesKeyAlgorithm,          \
+  api::CryptoKey::HmacKeyAlgorithm,         \
+  api::CryptoKey::RsaKeyAlgorithm,          \
+  api::CryptoKey::EllipticKeyAlgorithm,     \
+  api::CryptoKey::ArbitraryKeyAlgorithm,    \
+  api::CryptoKey::AsymmetricKeyDetails,     \
   api::DigestStream
 
 }  // namespace workerd::api
