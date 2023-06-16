@@ -9,6 +9,7 @@
 #include <workerd/jsg/jsg.h>
 #include <workerd/jsg/string.h>
 #include <workerd/io/compatibility-date.capnp.h>
+#include <workerd/api/blob.h>
 
 namespace workerd::api {
   // The original URL implementation based on kj::Url is not compliant with the
@@ -311,6 +312,11 @@ public:
   // ].filter((test) => URL.canParse(test));
   //
 
+  static kj::String createObjectURL( kj::OneOf<jsg::Ref<Blob>, jsg::Ref<File>> object);
+  static void revokeObjectURL(kj::String objectUrl);
+  static kj::Maybe<kj::OneOf<jsg::Ref<Blob>, jsg::Ref<File>>&> getObjectByUrl(
+      kj::StringPtr objectUrl);
+
   JSG_RESOURCE_TYPE(URL) {
     JSG_READONLY_PROTOTYPE_PROPERTY(origin, getOrigin);
     JSG_PROTOTYPE_PROPERTY(href, getHref, setHref);
@@ -327,6 +333,8 @@ public:
     JSG_METHOD_NAMED(toJSON, getHref);
     JSG_METHOD_NAMED(toString, getHref);
     JSG_STATIC_METHOD(canParse);
+    JSG_STATIC_METHOD(createObjectURL);
+    JSG_STATIC_METHOD(revokeObjectURL);
 
     JSG_TS_OVERRIDE(URL {
       constructor(url: string | URL, base?: string | URL);
@@ -341,8 +349,19 @@ private:
   UrlRecord inner;
   kj::Maybe<jsg::Ref<URLSearchParams>> maybeSearchParams;
 
+  static kj::Maybe<kj::HashMap<kj::String, kj::OneOf<jsg::Ref<Blob>, jsg::Ref<File>>>> objectUrls; // TODO: consider scoping to particular worker to efficiently remove old urls
+
+
   void visitForGc(jsg::GcVisitor& visitor) {
     visitor.visit(maybeSearchParams);
+    KJ_IF_MAYBE(objectUrls, URL::objectUrls) {
+      for (auto& object : *objectUrls) {
+        KJ_SWITCH_ONEOF(object.value) {
+          KJ_CASE_ONEOF(obj, jsg::Ref<Blob>) visitor.visit(obj);
+          KJ_CASE_ONEOF(obj, jsg::Ref<File>) visitor.visit(obj);
+        }
+      }
+    }
   }
 
   friend class URLSearchParams;
