@@ -6,6 +6,7 @@
 #include "blob.h"
 #include "util.h"
 #include <workerd/io/features.h>
+#include <workerd/util/uuid.h>
 #include <kj/array.h>
 #include <cmath>
 #include <map>
@@ -1659,6 +1660,34 @@ bool URL::canParse(jsg::UsvString url, jsg::Optional<jsg::UsvString> maybeBase) 
     }
   }
   return false;
+}
+
+using DataObject = kj::OneOf<jsg::Ref<Blob>, jsg::Ref<File>>;
+
+kj::Maybe<kj::HashMap<kj::String, DataObject>> URL::objectUrls = nullptr;
+
+const kj::StringPtr OBJECT_URL_PREFIX = "blob:workerdata:"_kj;
+
+kj::String URL::createObjectURL(DataObject object) {
+  if(URL::objectUrls == nullptr) {
+    URL::objectUrls = kj::HashMap<kj::String, DataObject>();
+  }
+  auto uuid = randomUUID(nullptr);
+  kj::_::readMaybe(URL::objectUrls)->insert(kj::str(uuid), kj::mv(object));
+  return kj::str(OBJECT_URL_PREFIX, uuid);
+}
+
+void URL::revokeObjectURL(kj::String objectUrl) {
+  KJ_IF_MAYBE(objectUrls, URL::objectUrls) {
+    objectUrls->erase(objectUrl.slice(OBJECT_URL_PREFIX.size()));
+  }
+}
+
+kj::Maybe<DataObject&> URL::getObjectByUrl(kj::StringPtr objectUrl) {
+  KJ_IF_MAYBE(objectUrls, URL::objectUrls) {
+    return objectUrls->find(objectUrl.slice(OBJECT_URL_PREFIX.size()));
+  }
+  return nullptr;
 }
 
 jsg::UsvString URL::getOrigin() {
