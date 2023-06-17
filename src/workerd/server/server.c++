@@ -1742,19 +1742,8 @@ private:
       // also TODO: as long as the format is custom; why not encode a capnp object?
       capnp::MallocMessageBuilder workerConfig = capnp::MallocMessageBuilder();
       auto conf = workerConfig.initRoot<config::Worker>();
-      auto dataUriPrefix = "data:text/plain;charset=utf-8,"_kj;
-      auto aUrl = req.getUrl();
-      KJ_REQUIRE(aUrl.startsWith(dataUriPrefix), "unsupported JS module URL");
-      aUrl = aUrl.slice(dataUriPrefix.size());
-      auto compatDatePrefix = "compatibility-date="_kj;
-      KJ_REQUIRE(aUrl.startsWith(compatDatePrefix), "unsupported JS module URL");
-      aUrl = aUrl.slice(compatDatePrefix.size());
-      auto compatEnd = aUrl.findFirst(',').orDefault(aUrl.size());
-      conf.setCompatibilityDate(kj::str(aUrl.slice(0, compatEnd)));
-      aUrl = aUrl.slice(compatEnd + 1);
-      auto script = KJ_REQUIRE_NONNULL(kj::decodeUriComponent(aUrl),
-          "invalid worker module encoding");
-      conf.setServiceWorkerScript(script);
+      conf.setCompatibilityDate("2023-02-28"_kj); // This shouldn't really matter
+      conf.setServiceWorkerScript(req.getScript());
 
       kj::String name = kj::str("web-worker-", ++workerCount, "-", opts.getName());
 

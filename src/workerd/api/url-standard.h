@@ -5,11 +5,11 @@
 #pragma once
 
 #include <kj/hash.h>
+#include "blob.h"
 #include "form-data.h"
 #include <workerd/jsg/jsg.h>
 #include <workerd/jsg/string.h>
 #include <workerd/io/compatibility-date.capnp.h>
-#include <workerd/api/blob.h>
 
 namespace workerd::api {
   // The original URL implementation based on kj::Url is not compliant with the
@@ -63,6 +63,8 @@ struct UrlRecord {
 
   bool equivalentTo(UrlRecord& other, GetHrefOption option = GetHrefOption::NONE);
 };
+
+const kj::StringPtr OBJECT_URL_PREFIX = "blob:workerdata:"_kj;
 
 class URL;
 
@@ -314,8 +316,7 @@ public:
 
   static kj::String createObjectURL( kj::OneOf<jsg::Ref<Blob>, jsg::Ref<File>> object);
   static void revokeObjectURL(kj::String objectUrl);
-  static kj::Maybe<kj::OneOf<jsg::Ref<Blob>, jsg::Ref<File>>&> getObjectByUrl(
-      kj::StringPtr objectUrl);
+  static kj::Maybe<kj::String> getObjectByUrl(jsg::Lock& js, kj::StringPtr objectUrl);
 
   JSG_RESOURCE_TYPE(URL) {
     JSG_READONLY_PROTOTYPE_PROPERTY(origin, getOrigin);

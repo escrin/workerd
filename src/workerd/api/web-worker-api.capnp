@@ -11,7 +11,7 @@ $Cxx.namespace("workerd::api::experimental");
 $Cxx.allowCancellation;
 
 struct CreateWorkerRequest {
-  url @0 :Text;
+  script @0 :Text;
   options @1 :WorkerOptions;
 }
 
