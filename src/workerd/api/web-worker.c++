@@ -16,7 +16,10 @@ jsg::Ref<WebWorker> WebWorker::constructor(jsg::Lock& js,
     kj::String aUrl, jsg::Optional<Options> options) {
   kj::Own<capnp::MallocMessageBuilder> requestMessage = kj::heap<capnp::MallocMessageBuilder>();
   auto requestBuilder = requestMessage->initRoot<experimental::CreateWorkerRequest>();
-  requestBuilder.setUrl(aUrl);
+  KJ_REQUIRE(aUrl.startsWith(url::OBJECT_URL_PREFIX), "unsupported script URL");
+  requestBuilder.setScript(KJ_REQUIRE_NONNULL(url::URL::getObjectByUrl(js, aUrl),
+      "worker script not found"));
+  KJ_DBG(kj::str(requestBuilder.getScript()));
   auto optionsBuilder = requestBuilder.initOptions();
   KJ_IF_MAYBE(opts, options) {
     KJ_IF_MAYBE(name, opts->name) {

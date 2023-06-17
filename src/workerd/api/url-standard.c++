@@ -1666,8 +1666,6 @@ using DataObject = kj::OneOf<jsg::Ref<Blob>, jsg::Ref<File>>;
 
 kj::Maybe<kj::HashMap<kj::String, DataObject>> URL::objectUrls = nullptr;
 
-const kj::StringPtr OBJECT_URL_PREFIX = "blob:workerdata:"_kj;
-
 kj::String URL::createObjectURL(DataObject object) {
   if(URL::objectUrls == nullptr) {
     URL::objectUrls = kj::HashMap<kj::String, DataObject>();
@@ -1683,9 +1681,17 @@ void URL::revokeObjectURL(kj::String objectUrl) {
   }
 }
 
-kj::Maybe<DataObject&> URL::getObjectByUrl(kj::StringPtr objectUrl) {
+kj::Maybe<kj::String> URL::getObjectByUrl(jsg::Lock& js, kj::StringPtr objectUrl) {
   KJ_IF_MAYBE(objectUrls, URL::objectUrls) {
-    return objectUrls->find(objectUrl.slice(OBJECT_URL_PREFIX.size()));
+    KJ_IF_MAYBE(object, objectUrls->find(objectUrl.slice(OBJECT_URL_PREFIX.size()))) {
+        KJ_SWITCH_ONEOF(*object) {
+          KJ_CASE_ONEOF(blob, jsg::Ref<Blob>)  return kj::str(blob->getData().asChars());
+          KJ_CASE_ONEOF(blob, jsg::Ref<File>) return kj::str(blob->getData().asChars());
+        }
+        KJ_UNREACHABLE
+    } else {
+      return nullptr;
+    }
   }
   return nullptr;
 }
