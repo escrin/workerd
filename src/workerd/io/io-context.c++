@@ -738,7 +738,8 @@ void IoContext::TimeoutManagerImpl::setTimeoutImpl(IoContext& context, Iterator 
   }
   promise = promise.attach(kj::mv(deferredTimeoutTimeRemoval));
 
-  if (context.actor != nullptr) {
+  if (true) {
+    KJ_DBG("FIXME: disallow non-actor, non-top-workers to set timeouts"); // TODO: make top module actor-like (reuse context)
     // Add a wait-until task which resolves when this timer completes. This ensures that
     // `IncomingRequest::drain()` waits until all timers finish.
     auto paf = kj::newPromiseAndFulfiller<void>();

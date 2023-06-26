@@ -84,12 +84,15 @@ public:
       const jsg::TypeHandler<JsonWebKey>& jwkHandler,
       const jsg::TypeHandler<jsg::Ref<CryptoKey>>& keyHandler);
 
+  void terminate(jsg::Lock& js);
+
   JSG_RESOURCE_TYPE(WebWorker) {
     JSG_INHERIT(EventTarget);
 
     JSG_NESTED_TYPE(EventTarget);
 
     JSG_METHOD(postMessage);
+    JSG_METHOD(terminate);
   }
 
 private:

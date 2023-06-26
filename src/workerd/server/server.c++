@@ -1718,7 +1718,7 @@ private:
   };
 
   Server& server;
-  uint workerCount;
+  uint workerCount = 0;
 
   kj::Promise<void> request(
       kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
@@ -1743,9 +1743,15 @@ private:
       capnp::MallocMessageBuilder workerConfig = capnp::MallocMessageBuilder();
       auto conf = workerConfig.initRoot<config::Worker>();
       conf.setCompatibilityDate("2023-02-28"_kj); // This shouldn't really matter
-      conf.setServiceWorkerScript(req.getScript());
+      if (req.getOptions().getType().isModule()) {
+        auto mainModule = conf.initModules(1)[0];
+        mainModule.setName("worker");
+        mainModule.setEsModule(req.getScript());
+      } else {
+        conf.setServiceWorkerScript(req.getScript());
+      }
 
-      kj::String name = kj::str("web-worker-", ++workerCount, "-", opts.getName());
+      kj::String name = kj::str("web-worker-", workerCount++, "-", opts.getName());
 
       server.actorConfigs.insert(kj::str(name), {});
 

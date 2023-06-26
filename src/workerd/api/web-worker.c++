@@ -19,7 +19,6 @@ jsg::Ref<WebWorker> WebWorker::constructor(jsg::Lock& js,
   KJ_REQUIRE(aUrl.startsWith(url::OBJECT_URL_PREFIX), "unsupported script URL");
   requestBuilder.setScript(KJ_REQUIRE_NONNULL(url::URL::getObjectByUrl(js, aUrl),
       "worker script not found"));
-  KJ_DBG(kj::str(requestBuilder.getScript()));
   auto optionsBuilder = requestBuilder.initOptions();
   KJ_IF_MAYBE(opts, options) {
     KJ_IF_MAYBE(name, opts->name) {
@@ -110,6 +109,10 @@ void WebWorker::postMessage(jsg::Lock& js,
       js, context, kj::mv(chan), "DedicatedWorkerGlobalScope"_kj,
       message.getHandle(js), nullptr, jwkHandler, keyHandler));
   })));
+}
+
+void WebWorker::terminate(jsg::Lock& js) {
+  KJ_DBG("unimplemented WebWorker::terminate");
 }
 
 void WebWorker::reportError(jsg::Lock& js, kj::Exception&& e) {
