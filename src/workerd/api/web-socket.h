@@ -40,7 +40,10 @@ public:
 
   v8::Local<v8::Value> getData(v8::Isolate* isolate) { return data.getHandle(isolate); }
 
-  jsg::Unimplemented getOrigin() { return jsg::Unimplemented(); }
+  kj::StringPtr getOrigin() {
+    return IoContext::current().getServiceName();
+  }
+
   jsg::Unimplemented getLastEventId() { return jsg::Unimplemented(); }
   jsg::Unimplemented getSource() { return jsg::Unimplemented(); }
   jsg::Unimplemented getPorts() { return jsg::Unimplemented(); }
