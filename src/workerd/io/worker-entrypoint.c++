@@ -183,10 +183,6 @@ kj::Promise<void> WorkerEntrypoint::request(
           postMessage(lock, des.readValue());
         }
       });
-    }).then([&response = *wrappedResponse]() mutable {
-      kj::HttpHeaders responseHeaders({});
-      auto out = response.send(204, "No Content", responseHeaders, (uint)0);
-      return out->write({}).attach(kj::mv(out));
     });
   } else {
     prom = context.run(
