@@ -1688,7 +1688,13 @@ private:
     kj::Promise<void> request(
         kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
         kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
-      return svc.request(method, url, headers, requestBody, response, requesterService);
+      if (method == kj::HttpMethod::POST) {
+        return svc.spawn(requestBody, response, requesterService);
+      } else if (method == kj::HttpMethod::DELETE) {
+        svc.server.services.erase(url);
+        // TODO: clear references to dead service and remove channel from parent worker
+      }
+      return kj::Promise<void>(kj::READY_NOW);
     }
 
     kj::Promise<void> connect(
@@ -1718,28 +1724,24 @@ private:
   };
 
   Server& server;
-  uint workerCount = 0;
 
   kj::Promise<void> request(
       kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
       kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
-    // TODO: respond with error
-    return kj::READY_NOW;
+    throwUnsupported();
   }
 
-  kj::Promise<void> request(
-      kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
+  kj::Promise<void> spawn(
       kj::AsyncInputStream& requestBody, kj::HttpService::Response& response,
       WorkerService& requesterService) {
     return capnp::readMessage(requestBody).then(
-        [this, url = kj::mv(url), &requesterService, &response]
+        [this, &requesterService, &response]
         (auto msgReader) {
       api::experimental::CreateWorkerRequest::Reader req =
         msgReader->template getRoot<api::experimental::CreateWorkerRequest>();
       auto opts = req.getOptions();
 
       // TODO: respond with 400 errors instead of throwing
-      // also TODO: as long as the format is custom; why not encode a capnp object?
       capnp::MallocMessageBuilder workerConfig = capnp::MallocMessageBuilder();
       auto conf = workerConfig.initRoot<config::Worker>();
       conf.setCompatibilityDate("2023-02-28"_kj); // This shouldn't really matter
@@ -1751,7 +1753,10 @@ private:
         conf.setServiceWorkerScript(req.getScript());
       }
 
-      kj::String name = kj::str("web-worker-", workerCount++, "-", opts.getName());
+      kj::String name = kj::str("web-worker-", req.getId());
+      if (opts.hasName()) {
+        name = kj::str(name, " (", opts.getName(), ")");
+      }
 
       server.actorConfigs.insert(kj::str(name), {});
 
@@ -1763,20 +1768,19 @@ private:
       auto workerService = server.makeWorker(
         name, kj::mv(conf), {},
         [&configError](auto err) {
-          if (err.startsWith("No event handlers"_kj)) return; // TODO: make `message` an event
+          if (err.startsWith("No event handlers"_kj)) return; // TODO: make `[self.on]message` an event
           configError = kj::mv(err);
         },
         requesterDesignator.asReader());
       KJ_IF_MAYBE(err, configError) {
         throw KJ_EXCEPTION(FAILED, *err);
       }
-      auto& worker = server.services.insert(kj::str(name), kj::mv(workerService)).value;
+      auto& worker = server.services.insert(kj::str(req.getId()), kj::mv(workerService)).value;
       worker->link();
 
       auto resMessage = kj::heap<capnp::MallocMessageBuilder>(); // TODO: not alloc
       auto res = resMessage->initRoot<api::experimental::CreateWorkerResponse>();
       res.setChannel(requesterService.addChannel(worker));
-      res.setName(kj::mv(name));
 
       kj::HttpHeaders responseHeaders({});
       auto out = response.send(201, "Created", responseHeaders, nullptr);

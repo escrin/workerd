@@ -9,6 +9,7 @@
 #include <workerd/api/crypto.h>
 #include <workerd/api/global-scope.h>
 #include <workerd/api/web-worker-api.capnp.h>
+#include <workerd/util/uuid.h>
 
 namespace workerd::api {
 
@@ -17,6 +18,10 @@ jsg::Ref<WebWorker> WebWorker::constructor(jsg::Lock& js,
   kj::Own<capnp::MallocMessageBuilder> requestMessage = kj::heap<capnp::MallocMessageBuilder>();
   auto requestBuilder = requestMessage->initRoot<experimental::CreateWorkerRequest>();
   KJ_REQUIRE(aUrl.startsWith(url::OBJECT_URL_PREFIX), "unsupported script URL");
+
+  auto id = workerd::randomUUID(nullptr);
+
+  requestBuilder.setId(id);
   requestBuilder.setScript(KJ_REQUIRE_NONNULL(url::URL::getObjectByUrl(js, aUrl),
       "worker script not found"));
   auto optionsBuilder = requestBuilder.initOptions();
@@ -55,52 +60,43 @@ jsg::Ref<WebWorker> WebWorker::constructor(jsg::Lock& js,
   auto headers = kj::HttpHeaders(context.getHeaderTable());
   auto req = client->request(kj::HttpMethod::POST, "", headers);
 
-  kj::Promise<kj::Tuple<uint, kj::String>> prom = capnp::writeMessage(*req.body, *requestMessage)
-        .attach(kj::mv(req.body), kj::mv(requestMessage))
-        .then([resp = kj::mv(req.response)]() mutable {
-      return resp.then([](kj::HttpClient::Response&& res) {
-        return capnp::readMessage(*res.body).attach(kj::mv(res.body)).then(
-            [statusCode = kj::mv(res.statusCode)](auto msgReader) -> kj::Tuple<uint, kj::String> {
-          auto resMsg = msgReader->template getRoot<api::experimental::CreateWorkerResponse>();
-          if (statusCode != 201) throw KJ_EXCEPTION(FAILED, resMsg.getError());
-          return kj::tuple(resMsg.getChannel(), kj::str(resMsg.getName()));
-        });
+  auto chanProm = capnp::writeMessage(*req.body, *requestMessage)
+      .attach(kj::mv(req.body), kj::mv(requestMessage))
+      .then([resp = kj::mv(req.response)]() mutable {
+    return resp.then([](kj::HttpClient::Response&& res) {
+      return capnp::readMessage(*res.body).attach(kj::mv(res.body)).then(
+          [statusCode = kj::mv(res.statusCode)](auto msgReader) {
+        auto resMsg = msgReader->template getRoot<api::experimental::CreateWorkerResponse>();
+        if (statusCode != 201) throw KJ_EXCEPTION(FAILED, resMsg.getError());
+        return resMsg.getChannel();
+      });
     });
   });
-  auto splitProms = prom.split();
-  auto worker = jsg::alloc<WebWorker>(kj::get<0>(splitProms).fork());
-  worker->init(js, kj::mv(kj::get<1>(splitProms)));;
+  auto worker = jsg::alloc<WebWorker>(kj::mv(id), chanProm.fork());
+  worker->init(js);
   return worker;
 }
 
-void WebWorker::init(jsg::Lock& js, kj::Promise<kj::String> name) {
+void WebWorker::init(jsg::Lock& js) {
   // The name of this WebWorker instance, as returned by the WebWorkerService,
   // must be registered as a named entrypoint having the effect of notifying
   // this object of a `postMessage` from the dedicated worker.
-  auto& context = IoContext::current();
-  context.awaitIo(js, kj::mv(name),
-    [this,&context](jsg::Lock& js, auto name) {
-      context.addWaitUntil(context.run(
-          [this, name = kj::mv(name)](Worker::Lock& lock) {
-        lock.addExportedHandler(kj::str(name), api::ExportedHandler {
-          .postMessage = [this](auto& js, auto value) {
-            auto event = jsg::alloc<api::MessageEvent>(js.v8Isolate, value);
-            this->dispatchEventImpl(js, kj::mv(event));
-          },
-          .self = nullptr
-        });
-      }));
+  auto& lock = IoContext::current().getCurrentLock();
+  lock.addExportedHandler(kj::str("web-worker-", this->id), api::ExportedHandler {
+    .postMessage = [this](auto& js, auto value) {
+      if (this->terminated) return;
+      auto event = jsg::alloc<api::MessageEvent>(js.v8Isolate, value);
+      this->dispatchEventImpl(js, kj::mv(event));
     },
-    [this, self = JSG_THIS](jsg::Lock& js, jsg::Value&& err) {
-      this->reportError(js, kj::mv(err));
-    }
-  );
+    .self = nullptr
+  });
 }
 
 void WebWorker::postMessage(jsg::Lock& js,
     v8::Local<v8::Value> message, jsg::Optional<kj::Array<jsg::Value>> transfer,
     const jsg::TypeHandler<JsonWebKey>& jwkHandler,
     const jsg::TypeHandler<jsg::Ref<CryptoKey>>& keyHandler) {
+  if (this->terminated) return;
   auto& context = IoContext::current();
   context.addWaitUntil(context.awaitJs(context.awaitIo(js, subrequestChannelPromise.addBranch(),
       [message = js.v8Ref(message), &jwkHandler, &keyHandler](jsg::Lock& js, auto chan) mutable {
@@ -112,7 +108,23 @@ void WebWorker::postMessage(jsg::Lock& js,
 }
 
 void WebWorker::terminate(jsg::Lock& js) {
-  KJ_DBG("unimplemented WebWorker::terminate");
+  if (this->terminated) return;
+  this->terminated = true;
+  auto& context = IoContext::current();
+  auto client = context.getHttpClient(IoContext::SELF_CLIENT_CHANNEL,
+      true, nullptr, "terminate"_kjc);
+  auto headers = kj::HttpHeaders(context.getHeaderTable());
+  auto initialized = subrequestChannelPromise.addBranch().ignoreResult();
+  auto req = client->request(kj::HttpMethod::DELETE, this->id, headers);
+  context.addWaitUntil(initialized.attach(kj::mv(client)).then([req = kj::mv(req)]() mutable {
+    return req.body->write(nullptr, 0)
+      .attach(kj::mv(req.body))
+      .then([resp = kj::mv(req.response)]() mutable {
+        return resp.then([](kj::HttpClient::Response&& response) mutable {
+          return response.body->readAllBytes().attach(kj::mv(response.body)).ignoreResult();
+        });
+      });
+  }));
 }
 
 void WebWorker::reportError(jsg::Lock& js, kj::Exception&& e) {
@@ -184,7 +196,7 @@ v8::MaybeLocal<v8::Object> WebWorker::Deserializer::ReadHostObject(v8::Isolate* 
     jwkHandler.tryUnwrap(js, jsg::check(deser.ReadValue(v8Context))),
     { v8::MaybeLocal<v8::Object>() });
 
-  bool extractable = false; // TODO: should this be `jwk.ext.orDefault(false)`?
+  bool extractable = jwk.ext.orDefault(false);
   auto ops = jwk.key_ops.map([](auto& ops) { return ops.asPtr(); }).orDefault({});
   jsg::Ref<api::CryptoKey> key = api::SubtleCrypto()
     .importKeySync(js, "jwk"_kj, kj::mv(jwk), {.name = kj::mv(alg) }, extractable, ops);

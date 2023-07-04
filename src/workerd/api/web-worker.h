@@ -13,8 +13,8 @@ namespace workerd::api {
 class WebWorker: public EventTarget {
 
 public:
-  WebWorker(kj::ForkedPromise<uint> subrequestChannelPromise)
-    : subrequestChannelPromise(kj::mv(subrequestChannelPromise)) {}
+  WebWorker(kj::String id, kj::ForkedPromise<uint> subrequestChannelPromise)
+    : id(kj::mv(id)), subrequestChannelPromise(kj::mv(subrequestChannelPromise)) {}
 
   class Serializer final: public jsg::Serializer {
   // Wraps the jsg::Serializer implementation to add custom (API) types.
@@ -96,12 +96,15 @@ public:
   }
 
 private:
+  kj::String id;
   kj::ForkedPromise<uint> subrequestChannelPromise;
+
+  bool terminated = false;
 
   kj::Maybe<jsg::Value> error;
   // If any error has occurred.
 
-  void init(jsg::Lock& js, kj::Promise<kj::String> name);
+  void init(jsg::Lock& js);
   // Handles any post-construction setup. For example, registering web worker entrypoints.
 
   void reportError(jsg::Lock& js, kj::Exception&& e);

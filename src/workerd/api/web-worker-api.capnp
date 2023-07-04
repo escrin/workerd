@@ -11,8 +11,9 @@ $Cxx.namespace("workerd::api::experimental");
 $Cxx.allowCancellation;
 
 struct CreateWorkerRequest {
-  script @0 :Text;
-  options @1 :WorkerOptions;
+  id @0 :Text;
+  script @1 :Text;
+  options @2 :WorkerOptions;
 }
 
 struct WorkerOptions {
@@ -31,6 +32,5 @@ struct WorkerOptions {
 
 struct CreateWorkerResponse {
   channel @0 :UInt32;
-  name @1: Text;
-  error @2 :Text;
+  error @1 :Text;
 }
