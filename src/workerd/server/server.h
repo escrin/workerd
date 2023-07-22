@@ -172,7 +172,8 @@ private:
       kj::StringPtr name, config::DiskDirectory::Reader conf,
       kj::HttpHeaderTable::Builder& headerTableBuilder);
   kj::Own<Service> makeWorker(kj::StringPtr name, config::Worker::Reader conf,
-      capnp::List<config::Extension>::Reader extensions);
+      capnp::List<config::Extension>::Reader extensions,
+      kj::Function<void(kj::String)> reportConfigError);
   kj::Own<Service> makeService(
       config::Service::Reader conf,
       kj::HttpHeaderTable::Builder& headerTableBuilder,
@@ -195,6 +196,7 @@ private:
   class WorkerService;
   class WorkerEntrypointService;
   class HttpListener;
+  class WorkerdApiService;
 
   void startServices(jsg::V8System& v8System, config::Config::Reader config,
                      kj::HttpHeaderTable::Builder& headerTableBuilder,
