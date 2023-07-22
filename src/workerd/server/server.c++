@@ -25,6 +25,7 @@
 #include <workerd/util/http-util.h>
 #include <workerd/api/actor-state.h>
 #include <workerd/util/mimetype.h>
+#include <workerd/util/uuid.h>
 #include "workerd-api.h"
 #include <stdlib.h>
 
@@ -1251,7 +1252,7 @@ public:
 
   // I/O channels, delivered when link() is called.
   struct LinkedIoChannels {
-    kj::Array<Service*> subrequest;
+    kj::Vector<Service*> subrequest;
     kj::Array<kj::Maybe<ActorNamespace&>> actor;  // null = configuration error
     kj::Maybe<Service&> cache;
     kj::Maybe<kj::Own<SqliteDatabase::Vfs>> actorStorage;
@@ -1528,6 +1529,13 @@ public:
     }
   };
 
+  uint addChannel(Service* service) {
+    auto& channels = KJ_REQUIRE_NONNULL(ioChannels.tryGet<LinkedIoChannels>(),
+        "link() has not been called");
+    channels.subrequest.add(service);
+    return channels.subrequest.size() - 1;
+  }
+
 private:
   class EntrypointService final: public Service {
   public:
@@ -1767,6 +1775,85 @@ private:
   void requireLimitsNotExceeded() override {}
   void reportMetrics(RequestObserver& requestMetrics) override {}
 };
+
+// =======================================================================================
+
+class Server::WorkerdApiService final: public Service, private WorkerInterface {
+  // Service used when the service is configured as network service.
+
+public:
+  WorkerdApiService(Server& server): server(server) {}
+
+  kj::Own<WorkerInterface> startRequest(IoChannelFactory::SubrequestMetadata metadata) override {
+    return { this, kj::NullDisposer::instance };
+  }
+
+  bool hasHandler(kj::StringPtr handlerName) override {
+    return handlerName == "fetch"_kj;
+  }
+
+private:
+  Server& server;
+
+  kj::Promise<void> request(
+      kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
+      kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
+    return requestBody.readAllText().then([this, &headers, &response](auto confJson) {
+      capnp::MallocMessageBuilder confArena;
+      capnp::JsonCodec json;
+      json.handleByAnnotation<config::Worker>();
+      auto conf = confArena.initRoot<config::Worker>();
+      json.decode(confJson, conf);
+
+      kj::String id = workerd::randomUUID(nullptr);
+
+      server.actorConfigs.insert(kj::str(id), {});
+
+      kj::Maybe<kj::String> configError = nullptr;
+      auto workerService = server.makeWorker(
+        id, conf.asReader(), {},
+        [&configError](auto err) {
+          configError = kj::mv(err);
+        });
+      KJ_IF_MAYBE(err, configError) {
+        throw KJ_EXCEPTION(FAILED, *err);
+      }
+      auto& worker = server.services.insert(kj::mv(id), kj::mv(workerService)).value;
+      worker->link();
+
+      auto resMessage = kj::heap<capnp::MallocMessageBuilder>(); // TODO: not alloc
+      auto res = resMessage->initRoot<config::ServiceDesignator>();
+      res.setName(id);
+      auto resJson = json.encode(res);
+
+      auto out = response.send(201, "Created", headers, nullptr);
+      return out->write(resJson.begin(), resJson.size()).attach(kj::mv(out), kj::mv(resJson));
+    });
+  }
+
+  kj::Promise<void> connect(
+      kj::StringPtr host, const kj::HttpHeaders& headers, kj::AsyncIoStream& connection,
+      ConnectResponse& tunnel, kj::HttpConnectSettings settings) override {
+    throwUnsupported();
+  }
+
+  void prewarm(kj::StringPtr url) override {}
+  kj::Promise<ScheduledResult> runScheduled(kj::Date scheduledTime, kj::StringPtr cron) override {
+    throwUnsupported();
+  }
+  kj::Promise<AlarmResult> runAlarm(kj::Date scheduledTime) override {
+    throwUnsupported();
+  }
+  kj::Promise<CustomEvent::Result> customEvent(kj::Own<CustomEvent> event) override {
+    throwUnsupported();
+  }
+
+  [[noreturn]] void throwUnsupported() {
+    JSG_FAIL_REQUIRE(Error, "WorkerdApiService does not support this event type.");
+  }
+};
+
+// =======================================================================================
 
 struct FutureSubrequestChannel {
   config::ServiceDesignator::Reader designator;
@@ -2073,13 +2160,15 @@ static kj::Maybe<WorkerdApiIsolate::Global> createBinding(
 uint startInspector(kj::StringPtr inspectorAddress, Server::InspectorServiceIsolateRegistrar& registrar);
 
 kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::Reader conf,
-    capnp::List<config::Extension>::Reader extensions) {
+    capnp::List<config::Extension>::Reader extensions,
+    kj::Function<void(kj::String)> reportConfigError) {
   auto& localActorConfigs = KJ_ASSERT_NONNULL(actorConfigs.find(name));
 
   struct ErrorReporter: public Worker::ValidationErrorReporter {
-    ErrorReporter(Server& server, kj::StringPtr name): server(server), name(name) {}
+    ErrorReporter(kj::Function<void(kj::String)> reportConfigError, kj::StringPtr name)
+      : reportConfigError(kj::mv(reportConfigError)), name(name) {}
 
-    Server& server;
+    kj::Function<void(kj::String)> reportConfigError;
     kj::StringPtr name;
 
     kj::HashMap<kj::String, kj::HashSet<kj::String>> namedEntrypoints;
@@ -2088,7 +2177,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
     kj::Maybe<kj::HashSet<kj::String>> defaultEntrypoint;
 
     void addError(kj::String error) override {
-      server.reportConfigError(kj::str("service ", name, ": ", error));
+      reportConfigError(kj::str("service ", name, ": ", error));
     }
 
     void addHandler(kj::Maybe<kj::StringPtr> exportName, kj::StringPtr type) override {
@@ -2103,7 +2192,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
     }
   };
 
-  ErrorReporter errorReporter(*this, name);
+  ErrorReporter errorReporter(kj::mv(reportConfigError), name);
 
   capnp::MallocMessageBuilder arena;
   // TODO(beta): Factor out FeatureFlags from WorkerBundle.
@@ -2216,7 +2305,8 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
 
   auto linkCallback =
       [this, name, conf, subrequestChannels = kj::mv(subrequestChannels),
-       actorChannels = kj::mv(actorChannels)](WorkerService& workerService) mutable {
+       actorChannels = kj::mv(actorChannels),
+       &reportConfigError](WorkerService& workerService) mutable {
     WorkerService::LinkedIoChannels result{.alarmScheduler = *alarmScheduler};
 
     auto services = kj::heapArrayBuilder<Service*>(subrequestChannels.size() +
@@ -2322,7 +2412,9 @@ kj::Own<Server::Service> Server::makeService(
       return makeNetworkService(conf.getNetwork());
 
     case config::Service::WORKER:
-      return makeWorker(name, conf.getWorker(), extensions);
+      return makeWorker(name, conf.getWorker(), extensions, [this](auto err) {
+        return this->reportConfigError(kj::mv(err));
+      });
 
     case config::Service::DISK:
       return makeDiskDirectoryService(name, conf.getDisk(), headerTableBuilder);
@@ -2742,6 +2834,14 @@ void Server::startServices(jsg::V8System& v8System, config::Config::Reader confi
 
     return decltype(services)::Entry {
       kj::str("internet"_kj),
+      kj::mv(service)
+    };
+  });
+
+  services.findOrCreate("@workerd"_kj, [&]() {
+    auto service = kj::heap<WorkerdApiService>(*this);
+    return decltype(services)::Entry {
+      kj::str("@workerd"_kj),
       kj::mv(service)
     };
   });
