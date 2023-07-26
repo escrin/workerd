@@ -92,6 +92,7 @@ public:
   };
 
   explicit Worker(kj::Own<const Script> script,
+                  kj::Array<kj::byte> measurement,
                   kj::Own<WorkerObserver> metrics,
                   kj::FunctionParam<void(
                       jsg::Lock& lock, const Api& api,
@@ -106,6 +107,7 @@ public:
   KJ_DISALLOW_COPY_AND_MOVE(Worker);
 
   const Script& getScript() const { return *script; }
+  const kj::ArrayPtr<const kj::byte> getMeasurement() const { return measurement.asPtr(); }
   const Isolate& getIsolate() const;
 
   const WorkerObserver& getMetrics() const { return *metrics; }
@@ -151,6 +153,7 @@ public:
 
 private:
   kj::Own<const Script> script;
+  const kj::Array<const kj::byte> measurement;
 
   kj::Own<WorkerObserver> metrics;
 

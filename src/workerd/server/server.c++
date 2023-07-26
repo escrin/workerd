@@ -11,6 +11,7 @@
 #include <kj/map.h>
 #include <capnp/message.h>
 #include <capnp/compat/json.h>
+#include <capnp/serialize.h>
 #include <workerd/api/analytics-engine.capnp.h>
 #include <workerd/io/actor-id.h>
 #include <workerd/io/worker-interface.h>
@@ -2796,8 +2797,24 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
     }
   }
 
+  // (Re-)Serialize the conf in preparation for measurement.
+  capnp::MallocMessageBuilder confRebuilder;
+  confRebuilder.setRoot(conf);
+  auto confBytes = capnp::messageToFlatArray(confRebuilder);
+  // Hash the seriaized conf into a measurement.
+  EVP_MD_CTX* digestCtx = EVP_MD_CTX_new();
+  const EVP_MD* confDigestAlg = EVP_sha384();
+  KJ_DEFER(EVP_MD_CTX_free(digestCtx));
+  KJ_REQUIRE(EVP_DigestInit_ex(digestCtx, confDigestAlg, nullptr));
+  KJ_REQUIRE(EVP_DigestUpdate(digestCtx, confBytes.begin(), confBytes.size()));
+  auto confDigest = kj::heapArray<kj::byte>(EVP_MD_CTX_size(digestCtx));
+  uint confDigestSize = 0;
+  KJ_REQUIRE(EVP_DigestFinal_ex(digestCtx, confDigest.begin(), &confDigestSize));
+  KJ_ASSERT(confDigestSize == confDigest.size());
+
   auto worker = kj::atomicRefcounted<Worker>(
       kj::mv(script),
+      kj::mv(confDigest),
       kj::atomicRefcounted<WorkerObserver>(),
       [&](jsg::Lock& lock, const Worker::Api& api, v8::Local<v8::Object> target) {
         return WorkerdApi::from(api).compileGlobals(
