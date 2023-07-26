@@ -1355,6 +1355,7 @@ void setWebAssemblyModuleHasInstance(jsg::Lock& lock, v8::Local<v8::Context> con
 // =======================================================================================
 
 Worker::Worker(kj::Own<const Script> scriptParam,
+               kj::Array<kj::byte> measurement,
                kj::Own<WorkerObserver> metricsParam,
                kj::FunctionParam<void(
                       jsg::Lock& lock, const ApiIsolate& apiIsolate,
@@ -1363,6 +1364,7 @@ Worker::Worker(kj::Own<const Script> scriptParam,
                SpanParent parentSpan, LockType lockType,
                kj::Maybe<ValidationErrorReporter&> errorReporter)
     : script(kj::mv(scriptParam)),
+      measurement(kj::mv(measurement)),
       metrics(kj::mv(metricsParam)),
       impl(kj::heap<Impl>()){
   // Enter/lock isolate.
