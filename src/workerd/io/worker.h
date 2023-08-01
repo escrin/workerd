@@ -91,7 +91,8 @@ public:
     STDOUT,
   };
 
-  explicit Worker(kj::Own<const Script> script,
+  explicit Worker(kj::String name,
+                  kj::Own<const Script> script,
                   kj::Array<kj::byte> measurement,
                   kj::Own<WorkerObserver> metrics,
                   kj::FunctionParam<void(
@@ -108,7 +109,9 @@ public:
 
   inline const Script& getScript() const { return *script; }
 
-  const kj::ArrayPtr<const kj::byte> getMeasurement() const { return measurement.asPtr(); }
+  inline const kj::StringPtr getName() const { return name.asPtr(); }
+
+  inline const kj::ArrayPtr<const kj::byte> getMeasurement() const { return measurement.asPtr(); }
 
   inline const Isolate& getIsolate() const;
 
@@ -154,6 +157,7 @@ public:
   using WarnAboutIsolateLockScope = workerd::WarnAboutIsolateLockScope;
 
 private:
+  kj::String name;
   kj::Own<const Script> script;
   const kj::Array<const kj::byte> measurement;
 
