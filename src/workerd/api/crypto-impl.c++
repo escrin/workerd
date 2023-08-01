@@ -179,6 +179,7 @@ std::pair<kj::StringPtr, const EVP_MD*> lookupDigestAlgorithm(kj::StringPtr algo
     {"SHA-256", EVP_sha256()},
     {"SHA-384", EVP_sha384()},
     {"SHA-512", EVP_sha512()},
+    {"SHA-512-256", EVP_sha512_256()},
 
     // MD5 is not supported by WebCrypto, presumably because the designers didn't want to
     // support broken crypto. However, the reality is that people still use MD5 for things, and if
