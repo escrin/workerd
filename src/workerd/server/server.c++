@@ -2303,6 +2303,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
   KJ_ASSERT(confDigestSize == confDigest.size());
 
   auto worker = kj::atomicRefcounted<Worker>(
+      kj::str(name),
       kj::mv(script),
       kj::mv(confDigest),
       kj::atomicRefcounted<WorkerObserver>(),

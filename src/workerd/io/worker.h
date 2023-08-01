@@ -78,7 +78,8 @@ public:
 
   class LockType;
 
-  explicit Worker(kj::Own<const Script> script,
+  explicit Worker(kj::String name,
+                  kj::Own<const Script> script,
                   kj::Array<kj::byte> measurement,
                   kj::Own<WorkerObserver> metrics,
                   kj::FunctionParam<void(
@@ -93,6 +94,7 @@ public:
   ~Worker() noexcept(false);
   KJ_DISALLOW_COPY_AND_MOVE(Worker);
 
+  const kj::StringPtr getName() const { return name.asPtr(); }
   const Script& getScript() const { return *script; }
   const kj::ArrayPtr<const kj::byte> getMeasurement() const { return measurement.asPtr(); }
   const Isolate& getIsolate() const;
@@ -155,6 +157,7 @@ public:
   };
 
 private:
+  kj::String name;
   kj::Own<const Script> script;
   const kj::Array<const kj::byte> measurement;
 
