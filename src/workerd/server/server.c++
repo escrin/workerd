@@ -13,6 +13,7 @@
 #include <capnp/compat/json.h>
 #include <capnp/serialize.h>
 #include <workerd/api/analytics-engine.capnp.h>
+#include <workerd/io/worker-interface.capnp.h>
 #include <workerd/io/worker-interface.h>
 #include <workerd/io/worker-entrypoint.h>
 #include <workerd/io/compatibility-date.h>
@@ -2091,37 +2092,66 @@ private:
   kj::Promise<void> request(
       kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
       kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
-    return requestBody.readAllText().then([this, &headers, &response](auto confJson) {
-      capnp::MallocMessageBuilder confArena;
-      capnp::JsonCodec json;
-      json.handleByAnnotation<config::Worker>();
-      auto conf = confArena.initRoot<config::Worker>();
-      json.decode(confJson, conf);
+    if (url == "http://workerd.local/workers") {
+      return requestBody.readAllText().then([this, &headers, &response](auto confJson) {
+          capnp::MallocMessageBuilder confArena;
+          capnp::JsonCodec json;
+          json.handleByAnnotation<config::Worker>();
+          auto conf = confArena.initRoot<config::Worker>();
+          json.decode(confJson, conf);
 
-      kj::String id = workerd::randomUUID(nullptr);
+          kj::String id = workerd::randomUUID(nullptr);
 
-      server.actorConfigs.insert(kj::str(id), {});
+          server.actorConfigs.insert(kj::str(id), {});
 
-      kj::Maybe<kj::String> configError = nullptr;
-      auto workerService = server.makeWorker(
-        id, conf.asReader(), {},
-        [&configError](auto err) {
-          configError = kj::mv(err);
-        });
-      KJ_IF_MAYBE(err, configError) {
-        throw KJ_EXCEPTION(FAILED, *err);
-      }
-      auto& worker = server.services.insert(kj::mv(id), kj::mv(workerService)).value;
-      worker->link();
+          kj::Maybe<kj::String> configError = nullptr;
+          auto workerService = server.makeWorker(
+              id, conf.asReader(), {},
+              [&configError](auto err) {
+              configError = kj::mv(err);
+              });
+          KJ_IF_MAYBE(err, configError) {
+            throw KJ_EXCEPTION(FAILED, *err);
+          }
+          auto& worker = server.services.insert(kj::str(id), kj::mv(workerService)).value;
+          worker->link();
 
-      auto resMessage = kj::heap<capnp::MallocMessageBuilder>(); // TODO: not alloc
-      auto res = resMessage->initRoot<config::ServiceDesignator>();
-      res.setName(id);
-      auto resJson = json.encode(res);
+          auto resMessage = kj::heap<capnp::MallocMessageBuilder>(); // TODO: not alloc
+          auto res = resMessage->initRoot<config::ServiceDesignator>();
+          res.setName(id);
+          auto resJson = json.encode(res);
 
-      auto out = response.send(201, "Created", headers, nullptr);
-      return out->write(resJson.begin(), resJson.size()).attach(kj::mv(out), kj::mv(resJson));
-    });
+          auto out = response.send(201, "Created", headers, nullptr);
+          return out->write(resJson.begin(), resJson.size()).attach(kj::mv(out), kj::mv(resJson));
+      });
+    } else if (url.startsWith("http://workerd.local/workers/"_kjc) &&
+               url.endsWith("/events/scheduled")) {
+      auto workerId = url.slice(29, 29 + 36);
+      return requestBody.readAllText().then([this, workerId = kj::mv(workerId),
+            &headers, &response](auto confJson) {
+          capnp::MallocMessageBuilder confArena;
+          capnp::JsonCodec json;
+          json.handleByAnnotation<rpc::Trace::ScheduledEventInfo>();
+          auto event = confArena.initRoot<rpc::Trace::ScheduledEventInfo>();
+          json.decode(confJson, event);
+
+          KJ_IF_MAYBE(svc, server.services.find(workerId)) {
+            IoChannelFactory::SubrequestMetadata metadata;
+            auto worker = (*svc)->startRequest(kj::mv(metadata));
+            kj::Date scheduledTime = kj::UNIX_EPOCH +
+              static_cast<long long>(event.getScheduledTime()) * kj::MILLISECONDS;
+            auto cron = event.getCron();
+            return worker->runScheduled(scheduledTime, cron)
+              .then([&response, &headers](auto scheduledResult) {
+                return response.send(204, "No Content", headers, nullptr)->write(nullptr, 0);
+              }).attach(kj::mv(cron));
+          } else {
+            return response.send(404, "Not Found", headers, nullptr)->write(nullptr, 0);
+          }
+      });
+    } else {
+      return response.send(404, "Not Found", headers, nullptr)->write(nullptr, 0);
+    }
   }
 
   kj::Promise<void> connect(
