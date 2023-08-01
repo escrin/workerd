@@ -992,6 +992,7 @@ KJ_TEST("Server: subrequest to default outbound") {
   subreq.recv(R"(
     GET /foo HTTP/1.1
     Host: subhost
+    x-caller-id: hello
 
   )"_blockquote);
   subreq.send(R"(
@@ -1045,6 +1046,7 @@ KJ_TEST("Server: override 'internet' service") {
   subreq.recv(R"(
     GET / HTTP/1.1
     Host: foo
+    x-caller-id: hello
 
   )"_blockquote);
   subreq.send(R"(
@@ -1096,6 +1098,7 @@ KJ_TEST("Server: override globalOutbound") {
   subreq.recv(R"(
     GET / HTTP/1.1
     Host: foo
+    x-caller-id: hello
 
   )"_blockquote);
   subreq.send(R"(
@@ -1186,6 +1189,7 @@ KJ_TEST("Server: capability bindings") {
     subreq.recv(R"(
       GET / HTTP/1.1
       Host: foo
+      x-caller-id: hello
 
     )"_blockquote);
     subreq.send(R"(
@@ -2769,6 +2773,7 @@ KJ_TEST("Server: external server cf blob header") {
       GET /path2 HTTP/1.1
       Host: ext
       CF-Blob: {"hello":"world"}
+      x-caller-id: hello
 
     )"_blockquote);
     subreq.send(R"(
