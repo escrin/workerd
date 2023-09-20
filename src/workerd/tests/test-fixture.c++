@@ -277,14 +277,17 @@ TestFixture::TestFixture(SetupParams&& params)
           capnp::List<server::config::Extension>::Reader{}),
       IsolateObserver::StartType::COLD, false, nullptr)),
     worker(kj::atomicRefcounted<Worker>(
+      kj::str("test_fixture"),
       kj::atomicAddRef(*workerScript),
+      kj::heapArray<kj::byte>(48),
       kj::atomicRefcounted<WorkerObserver>(),
       [](jsg::Lock& lock, const Worker::ApiIsolate& apiIsolate, v8::Local<v8::Object> target) {
         // no bindings, nothing to do
       },
       IsolateObserver::StartType::COLD,
       nullptr /* parentSpan */,
-      Worker::LockType(Worker::Lock::TakeSynchronously(kj::none))
+      Worker::LockType(Worker::Lock::TakeSynchronously(kj::none)),
+      kj::none
     )),
     errorHandler(kj::heap<DummyErrorHandler>()),
     waitUntilTasks(*errorHandler),
