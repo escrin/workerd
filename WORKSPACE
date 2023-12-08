@@ -131,6 +131,12 @@ git_repository(
     remote = "https://github.com/KhronosGroup/SPIRV-Headers.git",
 )
 
+git_repository(
+    name = "spirv_tools",
+    tag = "v2023.2",
+    remote = "https://github.com/KhronosGroup/SPIRV-Tools.git",
+)
+
 # ========================================================================================
 # tcmalloc
 
