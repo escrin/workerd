@@ -37,12 +37,11 @@ apple_support_dependencies()
 # ========================================================================================
 # Simple dependencies
 
-http_archive(
+git_repository(
     name = "capnp-cpp",
-    sha256 = "1e83f2d885f57195fa109d4cd76286d5c96cc66a39d96ba2e583fdb78d5aff3f",
-    strip_prefix = "capnproto-capnproto-b652cf8/c++",
-    type = "tgz",
-    urls = ["https://github.com/capnproto/capnproto/tarball/b652cf8a6312f6a473910547f8696cdc9a0f434d"],
+    commit = "4d24886025ed66cad363ec9a11a3ab6cbcafb829",
+    remote = "https://github.com/escrin/capnproto",
+    strip_prefix = "c++",
 )
 
 http_archive(
@@ -209,9 +208,8 @@ cc_library(
     copts = [
         "-w",
         "-Dverbose=-1",
+        "-Wno-implicit-function-declaration",
     ] + select({
-        "@platforms//os:linux": [ "-Wno-implicit-function-declaration" ],
-        "@platforms//os:macos": [ "-Wno-implicit-function-declaration" ],
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
