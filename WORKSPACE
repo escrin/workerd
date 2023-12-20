@@ -39,7 +39,7 @@ apple_support_dependencies()
 
 git_repository(
     name = "capnp-cpp",
-    commit = "20887ea078703e3223ef1c048da6c502f6e9122c",
+    commit = "4d24886025ed66cad363ec9a11a3ab6cbcafb829",
     remote = "https://github.com/escrin/capnproto",
     strip_prefix = "c++",
 )
