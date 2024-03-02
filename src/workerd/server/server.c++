@@ -2611,6 +2611,9 @@ static kj::Maybe<WorkerdApi::Global> createBinding(
       }
       return makeGlobal(Global::UnsafeEval {});
     }
+    case config::Worker::Binding::NSM: {
+      return makeGlobal(Global::NitroSecureModule {});
+    }
   }
   errorReporter.addError(kj::str(
       errorContext, "has unrecognized type. Was the config compiled with a newer version of "

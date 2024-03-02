@@ -20,6 +20,7 @@
 #include <workerd/api/kv.h>
 #include <workerd/api/modules.h>
 #include <workerd/api/pyodide.h>
+#include "workerd/api/nsm.h"
 #include <workerd/api/queue.h>
 #include <workerd/api/scheduled.h>
 #include <workerd/api/sockets.h>
@@ -68,6 +69,7 @@ JSG_DECLARE_ISOLATE_TYPE(JsgWorkerdIsolate,
   EW_BLOB_ISOLATE_TYPES,
   EW_CACHE_ISOLATE_TYPES,
   EW_CRYPTO_ISOLATE_TYPES,
+  EW_NSM_ISOLATE_TYPES,
   EW_ENCODING_ISOLATE_TYPES,
   EW_FORMDATA_ISOLATE_TYPES,
   EW_HTML_REWRITER_ISOLATE_TYPES,
@@ -694,6 +696,9 @@ static v8::Local<v8::Value> createBindingValue(
     KJ_CASE_ONEOF(unsafe, Global::UnsafeEval) {
       value = lock.wrap(context, jsg::alloc<api::UnsafeEval>());
     }
+    KJ_CASE_ONEOF(nsm, Global::NitroSecureModule) {
+      value = lock.wrap(context, jsg::alloc<api::NitroSecureModule>());
+    }
   }
 
   return value;
@@ -776,6 +781,9 @@ WorkerdApi::Global WorkerdApi::Global::clone() const {
     }
     KJ_CASE_ONEOF(unsafe, Global::UnsafeEval) {
       result.value = Global::UnsafeEval {};
+    }
+    KJ_CASE_ONEOF(nsm, Global::NitroSecureModule) {
+      result.value = Global::NitroSecureModule {};
     }
   }
 
