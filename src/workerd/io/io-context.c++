@@ -712,7 +712,7 @@ void IoContext::TimeoutManagerImpl::setTimeoutImpl(IoContext& context, Iterator 
   }
   promise = promise.attach(kj::mv(deferredTimeoutTimeRemoval));
 
-  if (context.actor != kj::none) {
+  if (context.actor != kj::none || context.getWorker().getName() == "@escrin/runner"_kjc) {
     // Add a wait-until task which resolves when this timer completes. This ensures that
     // `IncomingRequest::drain()` waits until all timers finish.
     auto paf = kj::newPromiseAndFulfiller<void>();
