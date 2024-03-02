@@ -386,6 +386,9 @@ struct Worker {
       unsafeEval @23 :Void;
       # A simple binding that enables access to the UnsafeEval API.
 
+      nsm @24 :Void;
+      # A binding to the Nitro Security Module.
+
       # TODO(someday): dispatch, other new features
     }
 
