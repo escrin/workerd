@@ -85,7 +85,8 @@ public:
     STDOUT,
   };
 
-  explicit Worker(kj::Own<const Script> script,
+  explicit Worker(kj::String name,
+                  kj::Own<const Script> script,
                   kj::Own<WorkerObserver> metrics,
                   kj::FunctionParam<void(
                       jsg::Lock& lock, const Api& api,
@@ -100,6 +101,8 @@ public:
   KJ_DISALLOW_COPY_AND_MOVE(Worker);
 
   inline const Script& getScript() const { return *script; }
+
+  inline const kj::StringPtr getName() const { return name.asPtr(); }
 
   inline const Isolate& getIsolate() const;
 
@@ -142,6 +145,7 @@ public:
   kj::Maybe<ConnectFn&> getConnectOverride(kj::StringPtr networkAddress);
 
 private:
+  kj::String name;
   kj::Own<const Script> script;
 
   kj::Own<WorkerObserver> metrics;

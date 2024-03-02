@@ -2844,6 +2844,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::
   }
 
   auto worker = kj::atomicRefcounted<Worker>(
+      kj::str(name),
       kj::mv(script),
       kj::atomicRefcounted<WorkerObserver>(),
       [&](jsg::Lock& lock, const Worker::Api& api, v8::Local<v8::Object> target) {
