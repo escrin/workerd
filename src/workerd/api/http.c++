@@ -1507,6 +1507,7 @@ jsg::Promise<jsg::Ref<Response>> fetchImplNoOutputLock(
       ioContext, jsRequest->serializeCfBlobJson(js), "fetch"_kjc));
 
   kj::HttpHeaders headers(ioContext.getHeaderTable());
+  headers.add("x-caller-id"_kjc, ioContext.getWorker().getName());
   jsRequest->shallowCopyHeadersTo(headers);
 
   kj::String url = uriEncodeControlChars(
