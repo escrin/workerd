@@ -824,6 +824,130 @@ private:
   }
 };
 
+class Socks5ProxyNetwork final: public kj::Network {
+public:
+  Socks5ProxyNetwork(kj::StringPtr proxyHostname,
+      kj::Network& inner,
+      kj::Maybe<kj::TlsContext&> tls = kj::none,
+      kj::Maybe<kj::Own<kj::NetworkAddress>> resolvedProxyAddr = kj::none)
+    : inner(inner), proxyHostname(kj::mv(proxyHostname)),
+      proxyAddr(kj::mv(resolvedProxyAddr)), tls(kj::mv(tls)) {}
+
+  kj::Promise<kj::Own<kj::NetworkAddress>> parseAddress(kj::StringPtr addr, uint portHint) override {
+    co_return kj::heap<Socks5NetworkAddress>(co_await resolveProxyAddr(), addr, portHint, tls);
+  }
+
+  kj::Own<kj::NetworkAddress> getSockaddr(const void* sockaddr, uint len) override {
+    KJ_UNIMPLEMENTED("Socks5NetworkAddress::getSockaddr() not implemented");
+  }
+
+  kj::Own<Network> restrictPeers(
+      kj::ArrayPtr<const kj::StringPtr> allow,
+      kj::ArrayPtr<const kj::StringPtr> deny = nullptr) override {
+    auto addr = proxyAddr.map([](auto& addr) -> kj::Own<kj::NetworkAddress>  { return addr->clone(); });
+    auto restricted = inner.restrictPeers(allow, deny);
+    return kj::heap<Socks5ProxyNetwork>(
+        proxyHostname, *restricted, tls, kj::mv(addr)).attach(kj::mv(restricted));
+  }
+
+private:
+  kj::Network& inner;
+  kj::StringPtr proxyHostname;
+  kj::Maybe<kj::Own<kj::NetworkAddress>> proxyAddr = kj::none;
+  kj::Maybe<kj::TlsContext&> tls = kj::none;
+
+  kj::Promise<kj::Own<kj::NetworkAddress>> resolveProxyAddr() {
+    KJ_IF_SOME(p, proxyAddr) {
+      co_return p->clone();
+    } else {
+      kj::Own<kj::NetworkAddress> parsed = co_await inner.parseAddress(proxyHostname);
+      proxyAddr = parsed->clone();
+      co_return parsed;
+    }
+  }
+
+  class Socks5NetworkAddress final: public kj::NetworkAddress {
+  public:
+    Socks5NetworkAddress(kj::Own<kj::NetworkAddress> proxy, kj::StringPtr upstream, uint portHint,
+        kj::Maybe<kj::TlsContext&> tls = kj::none)
+        : proxy(kj::mv(proxy)), upstream(upstream), portHint(portHint), tls(tls) {}
+
+    kj::Promise<kj::Own<kj::AsyncIoStream>> connect() override {
+      KJ_REQUIRE(upstream.size() < 253, "socks5: proxied host is too long");
+      const kj::byte RESERVED = 0;
+      const kj::byte SOCKS5_VER = 5;
+      const kj::byte AUTH_METHOD_NONE = 0;
+      const kj::byte CMD_CONNECT = 1;
+
+      const kj::byte ADDR_IP4 = 1;
+      const kj::byte ADDR_FQDN = 3;
+      const kj::byte ADDR_IP6 = 4;
+
+      // 1. Send auth request
+      auto stream = co_await proxy->connect();
+      kj::byte buf[7 + 253];
+      buf[0] = SOCKS5_VER;
+      buf[1] = 1; // one authentication method
+      buf[2] = AUTH_METHOD_NONE;
+      co_await stream->write(buf, 3);
+
+      // 2. handle auth response
+      co_await stream->read(buf, 2);
+      KJ_REQUIRE(buf[0] == SOCKS5_VER, "socks5: unsupported version");
+      KJ_REQUIRE(buf[1] == AUTH_METHOD_NONE, "socks5: unsupported auth method");
+
+      // 3. send connect request
+      buf[0] = SOCKS5_VER;
+      buf[1] = CMD_CONNECT;
+      buf[2] = RESERVED;
+      buf[3] = ADDR_FQDN;
+      buf[4] = upstream.size();
+      memcpy(buf + 5, upstream.begin(), upstream.size());
+      uint16_t cmdReqSize = upstream.size() + 5 + 2;
+      buf[cmdReqSize - 2] = portHint >> 8;
+      buf[cmdReqSize - 1] = portHint & 0xff;
+      co_await stream->write(buf, cmdReqSize);
+
+      // 4. handle connect respond
+      co_await stream->read(buf, 5);
+      KJ_REQUIRE(buf[0] == SOCKS5_VER, "socks5: unsupported version");
+      KJ_REQUIRE(buf[1] == 0, "socks5: failed to connect to upstream");
+      KJ_REQUIRE(buf[2] == RESERVED, "socks5: invalid connect response reserved byte");
+      switch(buf[3]) {
+        case ADDR_IP4:  co_await stream->read(buf, 4 + 2 - 1); break;
+        case ADDR_IP6:  co_await stream->read(buf, 16 + 2 - 1); break;
+        case ADDR_FQDN: co_await stream->read(buf, buf[4] + 2); break;
+        default: throw KJ_EXCEPTION(FAILED, "socks5: invalid bound address type");
+      }
+
+      // 5. Return connected stream
+      KJ_IF_SOME(tlsContext, tls) {
+        co_return co_await tlsContext.wrapClient(kj::mv(stream), upstream);
+      } else {
+        co_return stream;
+      }
+    }
+
+    kj::Own<kj::NetworkAddress> clone() override {
+      return kj::heap<Socks5NetworkAddress>(proxy->clone(), upstream, portHint, tls);
+    }
+
+    // We don't use any other methods, and they seem kinda annoying to implement.
+    kj::Own<kj::ConnectionReceiver> listen() override {
+      KJ_UNIMPLEMENTED("Socks5NetworkAddress::listen() not implemented");
+    }
+    kj::String toString() override {
+      KJ_UNIMPLEMENTED("Socks5NetworkAddress::toString() not implemented");
+    }
+
+  private:
+    kj::Own<kj::NetworkAddress> proxy;
+    kj::StringPtr upstream;
+    uint portHint;
+    kj::Maybe<kj::TlsContext&> tls = kj::none;
+  };
+};
+
 kj::Own<Server::Service> Server::makeNetworkService(config::Network::Reader conf) {
   TRACE_EVENT("workerd", "Server::makeNetworkService()");
   auto restrictedNetwork = network.restrictPeers(
@@ -832,7 +956,18 @@ kj::Own<Server::Service> Server::makeNetworkService(config::Network::Reader conf
 
   kj::Maybe<kj::Own<kj::Network>> tlsNetwork;
   kj::Maybe<kj::SecureNetworkWrapper&> tlsContext;
-  if (conf.hasTlsOptions()) {
+
+
+  if (conf.hasProxy()) {
+    auto proxyConf = conf.getProxy();
+    if (conf.hasTlsOptions()) {
+      auto ownedTlsContext = makeTlsContext(conf.getTlsOptions());
+      tlsNetwork = kj::heap<Socks5ProxyNetwork>(proxyConf.getAddress(), *restrictedNetwork, *ownedTlsContext)
+        .attach(kj::mv(ownedTlsContext));
+    }
+    restrictedNetwork = kj::heap<Socks5ProxyNetwork>(proxyConf.getAddress(), *restrictedNetwork)
+      .attach(kj::mv(restrictedNetwork));
+  } else if (conf.hasTlsOptions()) {
     auto ownedTlsContext = makeTlsContext(conf.getTlsOptions());
     tlsContext = ownedTlsContext;
     tlsNetwork = ownedTlsContext->wrapNetwork(*restrictedNetwork).attach(kj::mv(ownedTlsContext));

@@ -707,6 +707,18 @@ struct Network {
   # (The above is exactly the format supported by kj::Network::restrictPeers().)
 
   tlsOptions @2 :TlsOptions;
+
+  proxy @3 :ProxyOptions;
+}
+
+struct ProxyOptions {
+  type @0 :ProxyType = socks5;
+
+  enum ProxyType {
+    socks5 @0;
+  }
+
+  address @1 :Text = "127.0.0.1:1080";
 }
 
 struct DiskDirectory {
