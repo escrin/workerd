@@ -915,3 +915,15 @@ struct Extension {
     # Raw source code of ES module.
   }
 }
+
+# ========================================================================================
+# Unsafe Evalualuation
+
+struct NewWorker {
+  worker @0 :Worker;
+
+  expectedMeasurement @1 :Text;
+  # The expected measurement of the worker. The measurement is computed as the SHA-512 hash of the
+  # binary format of the worker's capnp config. If this field is set and the measurement does not
+  # match, the worker will not run.
+}

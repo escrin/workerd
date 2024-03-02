@@ -549,6 +549,8 @@ public:
               "run the server")
           .addSubCommand("compile", KJ_BIND_METHOD(*this, getCompile),
               "create a self-contained binary")
+          .addSubCommand("measure", KJ_BIND_METHOD(*this, getMeasure),
+              "measure the provided worker configuration")
           .addSubCommand("test", KJ_BIND_METHOD(*this, getTest),
               "run unit tests")
           .build();
@@ -558,10 +560,13 @@ public:
       // "explain": Produces human-friendly description of the config.
     } else {
       // We already have a config, meaning this must be a compiled binary.
-      auto builder = kj::MainBuilder(context, getVersionString(),
-            "Serve requests based on the compiled config.",
-            "This binary has an embedded configuration.");
-      return addServeOptions(builder);
+      return kj::MainBuilder(context, getVersionString(),
+            "Runs the Workers JavaScript/Wasm runtime.")
+          .addSubCommand("serve", KJ_BIND_METHOD(*this, getServe),
+              "run the server")
+          .addSubCommand("measure", KJ_BIND_METHOD(*this, getMeasure),
+              "measure the provided worker configuration")
+          .build();
     }
   }
 
@@ -688,6 +693,16 @@ public:
         .build();
   }
 
+  kj::MainFunc getMeasure() {
+    return kj::MainBuilder(context, getVersionString(),
+          "Measures the provided worker config and outputs the hash.",
+          "Loads a worker's code and config in the same way as would be done by the "
+          "`workerd.createWorker` method, hashes the full config, and returns the hash.")
+        .expectArg("<config-file>", CLI_METHOD(parseWorkerConfigFile))
+        .callAfterParsing(CLI_METHOD(measure))
+        .build();
+  }
+
   void addImportPath(kj::StringPtr pathStr) {
     auto path = fs->getCurrentPath().evalNative(pathStr);
     if (fs->getRoot().tryOpenSubdir(path) != kj::none) {
@@ -811,6 +826,19 @@ public:
   }
 
   void parseConfigFile(kj::StringPtr pathStr) {
+    config = parseCapnpConfig<config::Config>(pathStr);
+    // We'll fail at getConfig() if there are multiple top level Config objects.
+    // The error message says that you have to specify which config to use, but
+    // it's not clear that there is any mechanism to do that.
+    util::Autogate::initAutogate(getConfig().getAutogates());
+  }
+
+  void parseWorkerConfigFile(kj::StringPtr pathStr) {
+    workerConfig = parseCapnpConfig<config::Worker>(pathStr);
+  }
+
+  template <typename T>
+  kj::Maybe<typename T::Reader> parseCapnpConfig(kj::StringPtr pathStr) {
     if (pathStr == "-") {
       // Read from stdin.
 
@@ -826,8 +854,8 @@ public:
 #else
       auto reader = kj::heap<capnp::StreamFdMessageReader>(STDIN_FILENO, CONFIG_READER_OPTIONS);
 #endif
-      config = reader->getRoot<config::Config>();
       configOwner = kj::mv(reader);
+      return reader->getRoot<T>();
     } else {
       // Read file from disk.
       auto path = fs->getCurrentPath().evalNative(pathStr);
@@ -840,11 +868,11 @@ public:
                                   mapping.size() / sizeof(capnp::word));
         auto reader = kj::heap<capnp::FlatArrayMessageReader>(words, CONFIG_READER_OPTIONS)
             .attach(kj::mv(mapping));
-        config = reader->getRoot<config::Config>();
         configOwner = kj::mv(reader);
+        return reader->getRoot<T>();
       } else {
         // Interpret as schema file.
-        schemaParser.loadCompiledTypeAndDependencies<config::Config>();
+        schemaParser.loadCompiledTypeAndDependencies<T>();
 
         parsedSchema = schemaParser.parseFile(
             kj::heap<SchemaFileImpl>(fs->getRoot(), fs->getCurrentPath(),
@@ -857,18 +885,14 @@ public:
             auto constSchema = nested.asConst();
             auto type = constSchema.getType();
             if (type.isStruct() &&
-                type.asStruct().getProto().getId() == capnp::typeId<config::Config>()) {
-              topLevelConfigConstants.add(constSchema);
+                type.asStruct().getProto().getId() == capnp::typeId<T>()) {
+              return constSchema.as<T>();
             }
           }
         }
+        return kj::none;
       }
     }
-
-    // We'll fail at getConfig() if there are multiple top level Config objects.
-    // The error message says that you have to specify which config to use, but
-    // it's not clear that there is any mechanism to do that.
-    util::Autogate::initAutogate(getConfig().getAutogates());
   }
 
   void setConstName(kj::StringPtr name) {
@@ -1075,6 +1099,19 @@ public:
     }
   }
 
+  void measure() {
+    if (hadErrors) context.exit();
+    auto measurement = workerd::server::measureConfig(
+        KJ_UNWRAP_OR(workerConfig, CLI_ERROR("no worker config provided")));
+    auto measurementHex = kj::encodeHex(measurement);
+#if _WIN32
+    kj::FdOutputStream out(_fileno(stdout));
+#else
+    kj::FdOutputStream out(STDOUT_FILENO);
+#endif
+    out.write(measurementHex.asBytes().begin(), measurementHex.size());
+  }
+
   [[noreturn]] void serve() noexcept {
     serveImpl([&](jsg::V8System& v8System, config::Config::Reader config) {
 #if _WIN32
@@ -1164,6 +1201,7 @@ private:
 
   kj::Own<void> configOwner;  // backing object for `config`, if it's not `schemaParser`.
   kj::Maybe<config::Config::Reader> config;
+  kj::Maybe<config::Worker::Reader> workerConfig;
 
   kj::Vector<int> inheritedFds;
 
