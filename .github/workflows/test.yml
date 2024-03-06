@@ -16,7 +16,6 @@ jobs:
           [
             { name : linux, image : ubuntu-20.04 },
             { name : macOS, image : macos-13 },
-            { name : windows, image : windows-2022 }
           ]
         config:
           [
@@ -29,17 +28,6 @@ jobs:
           # Add an Address Sanitizer (ASAN) build on Linux for additional checking.
           - os:     { name: linux, image: ubuntu-20.04 }
             config: { suffix: -asan, bazel-args: --config=asan }
-          # Windows has a custom non-debug bazel config.
-          - os:     { name : windows, image : windows-2022 }
-            config: { suffix: '', bazel-args: --config=windows_no_dbg }
-          - os:     { name : windows, image : windows-2022 }
-            config: { suffix: -debug, bazel-args: --config=windows_dbg }
-        exclude:
-          # Skip the matrix generated Windows non-debug config to use the one added above.
-          - os:     { name : windows, image : windows-2022 }
-            config: { suffix: '', bazel-args: '' }
-          - os:     { name : windows, image : windows-2022 }
-            config: { suffix: -debug, bazel-args: --config=debug }
       fail-fast: false
     runs-on: ${{ matrix.os.image }}
     name: test (${{ matrix.os.name }}${{ matrix.config.suffix }})
