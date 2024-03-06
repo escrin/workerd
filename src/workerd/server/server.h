@@ -173,7 +173,8 @@ private:
       kj::HttpHeaderTable::Builder& headerTableBuilder);
   kj::Own<Service> makeWorker(kj::StringPtr name, config::Worker::Reader conf,
       capnp::List<config::Extension>::Reader extensions,
-      kj::Function<void(kj::String)> reportConfigError);
+      kj::Function<void(kj::String)> reportConfigError,
+      kj::Maybe<kj::Array<kj::byte>> expectedMeasurement = kj::none);
   kj::Own<Service> makeService(
       config::Service::Reader conf,
       kj::HttpHeaderTable::Builder& headerTableBuilder,
@@ -257,5 +258,7 @@ private:
     }
   };
 };
+
+kj::Array<kj::byte> measureConfig(config::Worker::Reader& config);
 
 }  // namespace workerd::server

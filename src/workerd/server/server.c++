@@ -2319,6 +2319,21 @@ private:
 
 // =======================================================================================
 
+kj::Array<kj::byte> measureConfig(config::Worker::Reader& config) {
+  auto confWords = capnp::canonicalize(config);
+  EVP_MD_CTX* digestCtx = EVP_MD_CTX_new();
+  const EVP_MD* digestAlg = EVP_sha384();
+  KJ_DEFER(EVP_MD_CTX_free(digestCtx));
+  KJ_REQUIRE(EVP_DigestInit_ex(digestCtx, digestAlg, nullptr));
+  KJ_REQUIRE(EVP_DigestUpdate(digestCtx,
+        reinterpret_cast<kj::byte*>(confWords.begin()), confWords.size() * sizeof(capnp::word)));
+  auto digest = kj::heapArray<kj::byte>(EVP_MD_CTX_size(digestCtx));
+  uint digestSize = 0;
+  KJ_REQUIRE(EVP_DigestFinal_ex(digestCtx, digest.begin(), &digestSize));
+  KJ_ASSERT(digestSize == digest.size());
+  return digest;
+}
+
 class Server::WorkerdApiService final: public Service, private WorkerInterface {
   // Service used when the service is configured as network service.
 
@@ -2343,20 +2358,31 @@ private:
       return requestBody.readAllText().then([this, &headers, &response](auto confJson) {
           capnp::MallocMessageBuilder confArena;
           capnp::JsonCodec json;
-          json.handleByAnnotation<config::Worker>();
-          auto conf = confArena.initRoot<config::Worker>();
+          json.handleByAnnotation<config::NewWorker>();
+          auto conf = confArena.initRoot<config::NewWorker>();
           json.decode(confJson, conf);
 
           kj::String id = workerd::randomUUID(kj::none);
 
           server.actorConfigs.insert(kj::str(id), {});
 
+          kj::Maybe<kj::Array<kj::byte>> expectedMeasurement = kj::none;
+          if (conf.hasExpectedMeasurement()) {
+            auto res = kj::decodeHex(conf.getExpectedMeasurement());
+            if (res.hadErrors) {
+              auto out = response.send(400, "Bad Request", headers, kj::none);
+              auto errMsg = "invalid expected measurement"_kjc.asBytes();
+              return out->write(errMsg.begin(), errMsg.size());
+            }
+            expectedMeasurement = kj::mv(res);
+          }
+
           kj::Maybe<kj::String> configError = kj::none;
           auto workerService = server.makeWorker(
-              id, conf.asReader(), {},
-              [&configError](auto err) {
-              configError = kj::mv(err);
-              });
+            id, conf.getWorker().asReader(), {},
+            [&configError](auto err) { configError = kj::mv(err); },
+            kj::mv(expectedMeasurement)
+          );
           KJ_IF_SOME(err, configError) {
             throw KJ_EXCEPTION(FAILED, err);
           }
@@ -2778,8 +2804,19 @@ void Server::abortAllActors() {
 
 kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name, config::Worker::Reader conf,
     capnp::List<config::Extension>::Reader extensions,
-    kj::Function<void(kj::String)> reportConfigError) {
+    kj::Function<void(kj::String)> reportConfigError,
+    kj::Maybe<kj::Array<kj::byte>> expectedMeasurement) {
   TRACE_EVENT("workerd", "Server::makeWorker()", "name", name.cStr());
+
+  KJ_IF_SOME(expected, expectedMeasurement) {
+    auto measurement = measureConfig(conf);
+    if (measurement != expected) {
+      reportConfigError(kj::str("service ", name, ": measurement mismatched.",
+            " expected ", kj::encodeHex(expected), " but got ", kj::encodeHex(measurement)));
+      return makeInvalidConfigService();
+    }
+  }
+
   auto& localActorConfigs = KJ_ASSERT_NONNULL(actorConfigs.find(name));
 
   struct ErrorReporter: public Worker::ValidationErrorReporter {
