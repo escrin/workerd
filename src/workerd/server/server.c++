@@ -2334,14 +2334,15 @@ kj::Array<kj::byte> measureConfig(config::Worker::Reader& config) {
   return digest;
 }
 
-class Server::WorkerdApiService final: public Service, private WorkerInterface {
+class Server::WorkerdApiService final: public Service {
   // Service used when the service is configured as network service.
 
 public:
   WorkerdApiService(Server& server): server(server) {}
 
   kj::Own<WorkerInterface> startRequest(IoChannelFactory::SubrequestMetadata metadata) override {
-    return { this, kj::NullDisposer::instance };
+    auto& context = IoContext::current();
+    return kj::heap<WorkerdApiRequestHandler>(*this, context.getWorker());
   }
 
   bool hasHandler(kj::StringPtr handlerName) override {
@@ -2351,102 +2352,102 @@ public:
 private:
   Server& server;
 
-  kj::Promise<void> request(
-      kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
-      kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
-    if (url == "http://workerd.local/workers") {
-      return requestBody.readAllText().then([this, &headers, &response](auto confJson) {
-          capnp::MallocMessageBuilder confArena;
-          capnp::JsonCodec json;
-          json.handleByAnnotation<config::NewWorker>();
-          auto conf = confArena.initRoot<config::NewWorker>();
-          json.decode(confJson, conf);
+  class WorkerdApiRequestHandler final: public WorkerInterface {
+  public:
+    WorkerdApiRequestHandler(WorkerdApiService& parent, const Worker& requester)
+        : parent(parent), requester(requester) {}
 
-          kj::String id = workerd::randomUUID(kj::none);
+    kj::Promise<void> request(
+        kj::HttpMethod method, kj::StringPtr url, const kj::HttpHeaders& headers,
+        kj::AsyncInputStream& requestBody, kj::HttpService::Response& response) override {
+      if (url != "http://workerd.local/workers") {
+        auto out = response.send(404, "Not Found", headers, kj::none);
+        auto errMsg = "Unknown workerd API endpoint"_kjc.asBytes();
+        co_await out->write(errMsg.begin(), errMsg.size());
+        co_return;
+      }
 
-          server.actorConfigs.insert(kj::str(id), {});
+      auto confJson = co_await requestBody.readAllText();
 
-          kj::Maybe<kj::Array<kj::byte>> expectedMeasurement = kj::none;
-          if (conf.hasExpectedMeasurement()) {
-            auto res = kj::decodeHex(conf.getExpectedMeasurement());
-            if (res.hadErrors) {
-              auto out = response.send(400, "Bad Request", headers, kj::none);
-              auto errMsg = "invalid expected measurement"_kjc.asBytes();
-              return out->write(errMsg.begin(), errMsg.size());
-            }
-            expectedMeasurement = kj::mv(res);
-          }
+      capnp::MallocMessageBuilder confArena;
+      capnp::JsonCodec json;
+      json.handleByAnnotation<config::NewWorker>();
+      auto conf = confArena.initRoot<config::NewWorker>();
+      json.decode(confJson, conf);
 
-          kj::Maybe<kj::String> configError = kj::none;
-          auto workerService = server.makeWorker(
-            id, conf.getWorker().asReader(), {},
-            [&configError](auto err) { configError = kj::mv(err); },
-            kj::mv(expectedMeasurement)
-          );
-          KJ_IF_SOME(err, configError) {
-            throw KJ_EXCEPTION(FAILED, err);
-          }
-          auto& worker = server.services.insert(kj::str(id), kj::mv(workerService)).value;
-          worker->link();
+      WorkerService* requesterService;
+      KJ_IF_SOME(svc, parent.server.services.find(requester.getName())) {
+        requesterService = &kj::downcast<WorkerService>(*svc);
+      } else {
+        auto out = response.send(500, "Internal Server Error", headers, kj::none);
+        auto errMsg = "unable to locate requester service"_kjc.asBytes();
+        co_await out->write(errMsg.begin(), errMsg.size());
+        co_return;
+      }
 
-          auto resMessage = kj::heap<capnp::MallocMessageBuilder>(); // TODO: not alloc
-          auto res = resMessage->initRoot<config::ServiceDesignator>();
-          res.setName(id);
-          auto resJson = json.encode(res);
+      kj::String id = workerd::randomUUID(kj::none);
 
-          auto out = response.send(201, "Created", headers, kj::none);
-          return out->write(resJson.begin(), resJson.size()).attach(kj::mv(out), kj::mv(resJson));
-      });
-    } else if (url.startsWith("http://workerd.local/workers/"_kjc) &&
-               url.endsWith("/events/scheduled")) {
-      auto workerId = url.slice(29, 29 + 36);
-      return requestBody.readAllText().then([this, workerId = kj::mv(workerId),
-            &headers, &response](auto confJson) {
-          capnp::MallocMessageBuilder confArena;
-          capnp::JsonCodec json;
-          json.handleByAnnotation<rpc::Trace::ScheduledEventInfo>();
-          auto event = confArena.initRoot<rpc::Trace::ScheduledEventInfo>();
-          json.decode(confJson, event);
+      parent.server.actorConfigs.insert(kj::str(id), {});
 
-          KJ_IF_SOME(svc, server.services.find(workerId)) {
-            IoChannelFactory::SubrequestMetadata metadata;
-            auto worker = svc->startRequest(kj::mv(metadata));
-            kj::Date scheduledTime = kj::UNIX_EPOCH +
-              static_cast<long long>(event.getScheduledTime()) * kj::MILLISECONDS;
-            auto cron = event.getCron();
-            return worker->runScheduled(scheduledTime, cron)
-              .then([&response, &headers](auto scheduledResult) {
-                return response.send(204, "No Content", headers, kj::none)->write(nullptr, 0);
-              }).attach(kj::mv(cron));
-          } else {
-            return response.send(404, "Not Found", headers, kj::none)->write(nullptr, 0);
-          }
-      });
-    } else {
-      return response.send(404, "Not Found", headers, kj::none)->write(nullptr, 0);
+      kj::Maybe<kj::Array<kj::byte>> expectedMeasurement = kj::none;
+      if (conf.hasExpectedMeasurement()) {
+        auto res = kj::decodeHex(conf.getExpectedMeasurement());
+        if (res.hadErrors) {
+          auto out = response.send(400, "Bad Request", headers, kj::none);
+          auto errMsg = "invalid expected measurement"_kjc.asBytes();
+          co_await out->write(errMsg.begin(), errMsg.size());
+          co_return;
+        }
+        expectedMeasurement = kj::mv(res);
+      }
+
+      kj::Maybe<kj::String> configError = kj::none;
+      auto workerService = parent.server.makeWorker(
+        id, conf.getWorker().asReader(), {},
+        [&configError](auto err) { configError = kj::mv(err); },
+        kj::mv(expectedMeasurement)
+      );
+      KJ_IF_SOME(err, configError) {
+          auto out = response.send(400, "Bad Request", headers, kj::none);
+          auto errMsg = kj::str(err);
+          co_await out->write(errMsg.begin(), errMsg.size());
+          co_return;
+      }
+      auto& worker = parent.server.services.insert(kj::str(id), kj::mv(workerService)).value;
+      worker->link();
+
+      uint newWorkerChannel = requesterService->addChannel(worker);
+
+      auto resMsg = kj::str(newWorkerChannel);
+      auto out = response.send(201, "Created", headers, kj::none);
+      co_await out->write(resMsg.begin(), resMsg.size()).attach(kj::mv(out), kj::mv(resMsg));
+      co_return;
     }
-  }
 
-  kj::Promise<void> connect(
-      kj::StringPtr host, const kj::HttpHeaders& headers, kj::AsyncIoStream& connection,
-      ConnectResponse& tunnel, kj::HttpConnectSettings settings) override {
-    throwUnsupported();
-  }
+    kj::Promise<void> connect(
+        kj::StringPtr host, const kj::HttpHeaders& headers, kj::AsyncIoStream& connection,
+        ConnectResponse& tunnel, kj::HttpConnectSettings settings) override {
+      throwUnsupported();
+    }
+    void prewarm(kj::StringPtr url) override {}
+    kj::Promise<ScheduledResult> runScheduled(kj::Date scheduledTime, kj::StringPtr cron) override {
+      throwUnsupported();
+    }
+    kj::Promise<AlarmResult> runAlarm(kj::Date scheduledTime, uint32_t retryCount) override {
+      throwUnsupported();
+    }
+    kj::Promise<CustomEvent::Result> customEvent(kj::Own<CustomEvent> event) override {
+      throwUnsupported();
+    }
 
-  void prewarm(kj::StringPtr url) override {}
-  kj::Promise<ScheduledResult> runScheduled(kj::Date scheduledTime, kj::StringPtr cron) override {
-    throwUnsupported();
-  }
-  kj::Promise<AlarmResult> runAlarm(kj::Date scheduledTime, uint32_t retryCount) override {
-    throwUnsupported();
-  }
-  kj::Promise<CustomEvent::Result> customEvent(kj::Own<CustomEvent> event) override {
-    throwUnsupported();
-  }
+    [[noreturn]] void throwUnsupported() {
+      JSG_FAIL_REQUIRE(Error, "WorkerdApiService does not support this event type.");
+    }
 
-  [[noreturn]] void throwUnsupported() {
-    JSG_FAIL_REQUIRE(Error, "WorkerdApiService does not support this event type.");
-  }
+  private:
+    WorkerdApiService& parent;
+    const Worker& requester;
+  };
 };
 
 // =======================================================================================
@@ -2609,6 +2610,9 @@ static kj::Maybe<WorkerdApi::Global> createBinding(
         binding.getService(),
         kj::mv(errorContext)
       });
+      if (binding.getService().getName() == "@workerd") {
+        return makeGlobal(Global::WorkerdApi { .subrequestChannel = channel });
+      }
       return makeGlobal(Global::Fetcher {
         .channel = channel,
         .requiresHost = true,

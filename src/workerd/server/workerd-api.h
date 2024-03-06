@@ -176,10 +176,19 @@ public:
     };
     struct UnsafeEval {};
     struct NitroSecureModule {};
+    struct WorkerdApi {
+      uint subrequestChannel;
+
+      WorkerdApi clone() const {
+        return WorkerdApi {
+          .subrequestChannel = subrequestChannel,
+        };
+      }
+    };
     kj::String name;
     kj::OneOf<Json, Fetcher, KvNamespace, R2Bucket, R2Admin, CryptoKey, EphemeralActorNamespace,
               DurableActorNamespace, QueueBinding, kj::String, kj::Array<byte>, Wrapped,
-              AnalyticsEngine, Hyperdrive, UnsafeEval, NitroSecureModule> value;
+              AnalyticsEngine, Hyperdrive, UnsafeEval, WorkerdApi, NitroSecureModule> value;
 
     Global clone() const;
   };

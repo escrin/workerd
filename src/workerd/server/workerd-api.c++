@@ -31,6 +31,7 @@
 #include <workerd/api/trace.h>
 #include <workerd/api/unsafe.h>
 #include <workerd/api/urlpattern.h>
+#include <workerd/api/workerd.h>
 #include <workerd/api/node/node.h>
 #include <workerd/io/promise-wrapper.h>
 #include <workerd/util/thread-scopes.h>
@@ -70,6 +71,7 @@ JSG_DECLARE_ISOLATE_TYPE(JsgWorkerdIsolate,
   EW_CACHE_ISOLATE_TYPES,
   EW_CRYPTO_ISOLATE_TYPES,
   EW_NSM_ISOLATE_TYPES,
+  EW_WORKERD_API_ISOLATE_TYPES,
   EW_ENCODING_ISOLATE_TYPES,
   EW_FORMDATA_ISOLATE_TYPES,
   EW_HTML_REWRITER_ISOLATE_TYPES,
@@ -699,6 +701,9 @@ static v8::Local<v8::Value> createBindingValue(
     KJ_CASE_ONEOF(nsm, Global::NitroSecureModule) {
       value = lock.wrap(context, jsg::alloc<api::NitroSecureModule>());
     }
+    KJ_CASE_ONEOF(workerdApi, Global::WorkerdApi) {
+      value = lock.wrap(context, jsg::alloc<api::WorkerdApi>(workerdApi.subrequestChannel));
+    }
   }
 
   return value;
@@ -784,6 +789,9 @@ WorkerdApi::Global WorkerdApi::Global::clone() const {
     }
     KJ_CASE_ONEOF(nsm, Global::NitroSecureModule) {
       result.value = Global::NitroSecureModule {};
+    }
+    KJ_CASE_ONEOF(workerdApi, Global::WorkerdApi) {
+      result.value = workerdApi.clone();
     }
   }
 
